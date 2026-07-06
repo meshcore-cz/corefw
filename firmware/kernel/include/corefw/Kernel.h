@@ -57,6 +57,29 @@ class Kernel {
     for (int i = 0; i < module_count_; ++i) modules_[i]->decorateAdvert(ad);
   }
 
+  // setConfigVar offers a custom-var write to each module; the first to claim
+  // the key wins. getConfigVars collects every module's "name:value" pairs into
+  // a comma-separated list (companion custom-var format), respecting `cap`.
+  // These back the companion CMD_SET_CUSTOM_VAR / CMD_GET_CUSTOM_VAR path so
+  // extensions can expose runtime config without new command codes.
+  bool setConfigVar(const char* name, const char* value) {
+    for (int i = 0; i < module_count_; ++i) {
+      if (modules_[i]->setConfigVar(name, value)) return true;
+    }
+    return false;
+  }
+  size_t getConfigVars(char* out, size_t cap) {
+    size_t n = 0;
+    for (int i = 0; i < module_count_; ++i) {
+      char tmp[96];
+      size_t w = modules_[i]->getConfigVars(tmp, sizeof(tmp));
+      if (w == 0) continue;
+      if (n > 0 && n < cap) out[n++] = ',';  // separate module contributions
+      for (size_t k = 0; k < w && n < cap; ++k) out[n++] = tmp[k];
+    }
+    return n;
+  }
+
  private:
   Board* board_ = nullptr;
   PowerPolicy* power_policy_ = nullptr;

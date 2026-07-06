@@ -93,6 +93,8 @@ build:
 
 codegen:
   class: HeltecV3Board
-  header: corefw/boards/HeltecV3Board.h
+  header: HeltecV3Board.h
+  sources:
+    - HeltecV3Board.h
   var: board
   register: registerBoard

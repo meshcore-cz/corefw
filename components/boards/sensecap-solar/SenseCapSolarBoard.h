@@ -1,11 +1,16 @@
-// WioTrackerL1Board — board package for the Seeed Wio Tracker L1.
+// SenseCapSolarBoard — board package for the Seeed SenseCAP Solar Node P1.
 //
-// nRF52840 + SX1262, SH1106 OLED, on-board GPS. Pin assignments arrive as -D
-// defines emitted by corefw from components/boards/wio-tracker-l1/component.yaml.
+// nRF52840 (XIAO nRF52840 module) + SX1262 with an external RX/TX switch
+// (SX126X_RXEN), an L76KB GPS on Serial1, and a solar/LiPo battery — no display
+// (headless outdoor repeater). Pin assignments arrive as -D defines emitted by
+// corefw from components/boards/sensecap-solar/component.yaml, plus the Arduino
+// pin aliases (BATTERY_PIN, VBAT_ENABLE, ADC_MULTIPLIER, AREF_VOLTAGE) from the
+// board's variant.h. The shared nRF52 target main (firmware/platform/nrf52) does
+// all the runtime wiring; this class only exposes the board's peripherals.
 #pragma once
 
 #include <corefw/Board.h>
-#include <corefw/boards/Nrf52Idle.h>
+#include <platform/nrf52/Nrf52Idle.h>
 
 #if defined(COREFW_TARGET)
 #include <Arduino.h>
@@ -15,36 +20,38 @@
 
 namespace corefw {
 
-class WioTrackerL1Board : public Board {
+class SenseCapSolarBoard : public Board {
  public:
   const char* manufacturerName() const override { return "Seeed Studio"; }
-  const char* boardName() const override { return "Wio Tracker L1"; }
+  const char* boardName() const override { return "SenseCAP Solar"; }
 
   BoardCapabilities capabilities() const override {
     BoardCapabilities c;
-    c.radio = c.display = c.battery = c.gps = true;
+    c.radio = c.battery = c.gps = true;
     c.bluetooth = c.usb = c.deep_sleep = true;
+    c.display = false;  // headless solar node
     c.wifi = false;
     return c;
   }
 
   int maxTxPowerDbm() const override { return 22; }
 
-  // VBAT is read through a 2:1 divider on PIN_VBAT_READ against the 3.6V
-  // internal reference — same formula as MeshCore's WioTrackerL1Board so the
-  // reported millivolts (and the app's battery %) match the reference firmware.
-  // Cached and re-sampled at most every 2s: the ADC settle delay would otherwise
-  // stutter the main loop, since the UI reads this on every refresh.
+  // Battery is read through a 1M/512k divider on BATTERY_PIN against the 3.0V
+  // internal reference; VBAT_ENABLE (active-low) gates the divider. Same formula
+  // as MeshCore's SenseCapSolarBoard so the reported millivolts (and the app's
+  // battery %) match the reference firmware. Cached/2s so the ADC settle delay
+  // doesn't stutter the main loop.
   uint16_t batteryMilliVolts() override {
 #if defined(COREFW_TARGET)
     uint32_t now = millis();
     if (batt_mv_ != 0 && (now - batt_sampled_ms_) < kBatterySampleIntervalMs) {
       return batt_mv_;
     }
+    digitalWrite(VBAT_ENABLE, LOW);
     analogReadResolution(12);
-    analogReference(AR_INTERNAL);
+    analogReference(AR_INTERNAL_3_0);
     delay(10);
-    int adc = analogRead(PIN_VBAT_READ);
+    int adc = analogRead(BATTERY_PIN);
     batt_mv_ = uint16_t((adc * ADC_MULTIPLIER * AREF_VOLTAGE) / 4.096);
     batt_sampled_ms_ = now;
     return batt_mv_;
@@ -55,13 +62,14 @@ class WioTrackerL1Board : public Board {
 
   void begin() override {
 #if defined(COREFW_TARGET)
-    pinMode(PIN_VBAT_READ, INPUT);
-    pinMode(PIN_BUTTON1, INPUT_PULLUP);
-    pinMode(PIN_BUTTON2, INPUT_PULLUP);
-    pinMode(PIN_BUTTON3, INPUT_PULLUP);
-    pinMode(PIN_BUTTON4, INPUT_PULLUP);
-    pinMode(PIN_BUTTON5, INPUT_PULLUP);
-    pinMode(PIN_BUTTON6, INPUT_PULLUP);
+    pinMode(BATTERY_PIN, INPUT);
+    pinMode(VBAT_ENABLE, OUTPUT);
+    digitalWrite(VBAT_ENABLE, LOW);  // enable the battery divider
+    analogReadResolution(12);
+    analogReference(AR_INTERNAL_3_0);
+#if defined(PIN_USER_BTN)
+    pinMode(PIN_USER_BTN, INPUT_PULLUP);
+#endif
 #if defined(PIN_WIRE_SDA) && defined(PIN_WIRE_SCL)
     Wire.setPins(PIN_WIRE_SDA, PIN_WIRE_SCL);
 #endif
@@ -70,9 +78,10 @@ class WioTrackerL1Board : public Board {
     pinMode(P_LORA_TX_LED, OUTPUT);
     digitalWrite(P_LORA_TX_LED, LOW);
 #endif
-    delay(10);
+    delay(10);  // give the sx1262 time to power up
 #endif
   }
+
   RadioDriver* radio() override {
 #if defined(COREFW_TARGET)
     return &radio_;

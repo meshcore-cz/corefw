@@ -49,12 +49,25 @@ build:
 # How the generated composition root constructs & wires the object.
 codegen:
   class: AdaptiveSolarPolicy
-  header: adaptive_solar/AdaptiveSolarPolicy.h
+  header: AdaptiveSolarPolicy.h   # relative to this component directory
+  sources:                        # C++ shipped inside this dir, copied into the build
+    - AdaptiveSolarPolicy.h
   register: setPowerPolicy      # kernel API call
   setters:                       # validated option -> C++ setter
     low_battery: setLowBatteryThreshold
     critical_battery: setCriticalBatteryThreshold
 ```
+
+## Self-encapsulation
+
+A component keeps its C++ **in its own directory** and lists it under
+`codegen.sources`. At build time corefw copies those files into the generated
+project and adds the component's directory to the include path, so `header` is
+given relative to the component. The copy goes through the component's own
+filesystem, so the identical directory works whether the component is built-in,
+a local path, or fetched from git — nothing lives outside the component. The
+built-in boards (`components/boards/*/`) and the `cz-advert-features` extension
+follow this exact pattern.
 
 ## Schema (`schema.yaml`)
 

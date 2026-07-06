@@ -95,6 +95,8 @@ build:
 
 codegen:
   class: WioTrackerL1Board
-  header: corefw/boards/WioTrackerL1Board.h
+  header: WioTrackerL1Board.h
+  sources:
+    - WioTrackerL1Board.h
   var: board
   register: registerBoard

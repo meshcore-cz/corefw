@@ -40,14 +40,22 @@ A ready profile: [`profiles/heltec-v3-repeater-cz.yaml`](../../../profiles/helte
 | `feat1` | integer | 0–65535 | 0 | Feature bitmask #1. `0` omits the field (wire-compatible with plain nodes). |
 | `feat2` | integer | 0–65535 | 0 | Feature bitmask #2. `0` omits the field. |
 
-## Want runtime `set advert.features` too?
+## Runtime `set advert.features`
 
-The declarative form covers the common case (a node's features are fixed at
-build). If you genuinely need to change them at runtime and persist them like the
-`/cz_advert` sidecar, extend this component to also implement `configure()`
-(load from `companion::PersistentStore`) and expose a companion command — the
-storage-codec pattern in [`firmware/kernel/companion/`](../../../firmware/kernel/companion/)
-is the model. That stays a change to *this* extension, still not a fork.
+Beyond the build-time defaults, the flags are also settable at runtime over the
+companion protocol, via the standard custom-var commands — no new command codes:
+
+- `CMD_SET_CUSTOM_VAR advert.feat1 0x00ff` → updates `feat1` (decimal or hex)
+- `CMD_GET_CUSTOM_VARS` → `advert.feat1:00ff,advert.feat2:00a0`
+
+The next self-advert reflects the change. This works because the extension
+implements `Module::setConfigVar`/`getConfigVars`, which the kernel fans out from
+the companion custom-var path (`Kernel::setConfigVar`/`getConfigVars`).
+
+**Not yet persisted.** A runtime change lives in RAM and resets on reboot (the
+build-time `feat1`/`feat2` are the power-on defaults). To persist like upstream's
+`/cz_advert` sidecar, extend this component to write through
+`companion::PersistentStore` — still a change to *this* extension, not a fork.
 
 ## Verified
 

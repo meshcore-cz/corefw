@@ -15,6 +15,7 @@ module list, and the kernel calls its hook at the right moment.
 | Hook | Called when | Use it to |
 |------|-------------|-----------|
 | `Module::decorateAdvert(proto::AdvertData&)` | just before every self-advert is signed (`Kernel::applyAdvertDecorators`) | add fields to the advert app_data (feature flags, extra location policy, …) |
+| `Module::setConfigVar` / `getConfigVars` | on companion `CMD_SET/GET_CUSTOM_VAR` (`Kernel::setConfigVar`/`getConfigVars`) | expose runtime-settable key/value config over the existing companion protocol, no new command codes |
 
 More hooks are added to `Module` as needed; because they default to a no-op,
 adding one never breaks existing components.

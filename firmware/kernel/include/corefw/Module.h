@@ -59,6 +59,15 @@ class Module {
   // feature-flag extension — can enrich the advert without any core changes or
   // a fork. The default is a no-op.
   virtual void decorateAdvert(proto::AdvertData&) {}
+
+  // Extension hooks: back the companion custom-var command surface
+  // (CMD_SET_CUSTOM_VAR / CMD_GET_CUSTOM_VAR). A module claims a key by handling
+  // it in setConfigVar (return true) and advertises its current values by
+  // appending "name:value" pairs in getConfigVars. This lets an extension expose
+  // runtime-settable config over the existing companion protocol — no new
+  // command codes, no fork. Kernel::setConfigVar / getConfigVars fan these out.
+  virtual bool setConfigVar(const char* /*name*/, const char* /*value*/) { return false; }
+  virtual size_t getConfigVars(char* /*out*/, size_t /*cap*/) { return 0; }
 };
 
 }  // namespace corefw

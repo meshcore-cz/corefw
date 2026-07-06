@@ -28,6 +28,7 @@
 #include <corefw/protocol/Advert.h>
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
+#include <platform/shared/PlatformTx.h>
 
 #include <corefw/companion/Storage.h>
 #include <corefw/companion/Transport.h>
@@ -60,6 +61,7 @@ namespace { using BoardDisplay = corefw::ui::NullDisplay; constexpr bool kHasDis
 #endif
 
 using namespace corefw;
+using namespace corefw::platform;  // setRoute / applyPath / emitAdvert
 
 // --- Board services -------------------------------------------------------
 
@@ -205,6 +207,12 @@ class WioCompanionHost : public companion::CompanionHost {
     if (!g_companion) return -1;
     return g_companion->advertPath(pub_key, recv_ts, path);
   }
+  // Custom vars fan out to extension modules (e.g. cz-advert-features), so an
+  // extension can expose runtime config over CMD_GET/SET_CUSTOM_VAR.
+  size_t getCustomVars(char* out, size_t cap) override { return g_kernel.getConfigVars(out, cap); }
+  bool setCustomVar(const char* name, const char* value) override {
+    return g_kernel.setConfigVar(name, value);
+  }
   bool factoryReset() override {
     // Only an explicit CMD_FACTORY_RESET erases stored data.
     g_fs.remove(companion::PREFS_FILE);
@@ -216,11 +224,6 @@ class WioCompanionHost : public companion::CompanionHost {
 
 static WioCompanionHost g_host;
 
-// set the route bits on a packet built by the datagram builders (which leave
-// route = 0), preserving the payload type.
-static void setRoute(proto::Packet& pkt, uint8_t route) {
-  pkt.header = uint8_t((pkt.header & ~proto::PH_ROUTE_MASK) | (route & proto::PH_ROUTE_MASK));
-}
 
 // WioMeshSender bridges the companion command handler to the radio scheduler.
 // Flood packets get ROUTE_FLOOD; packets with a known return path go ROUTE_DIRECT
@@ -318,18 +321,8 @@ class WioMeshSender : public companion::MeshSender {
         ad.lon = st.lon_e6;
       }
     }
-    g_kernel.applyAdvertDecorators(ad);  // let extension components enrich it
-    proto::Packet pkt;
-    if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
-    setRoute(pkt, proto::ROUTE_FLOOD);
-    if (!flood) pkt.setPathHashSizeAndCount(1, 0);  // zero-hop
-    g_dispatcher->send(pkt);
-    return true;
-  }
-  static void applyPath(proto::Packet& pkt, const uint8_t* path, uint8_t path_len) {
-    uint8_t n = path_len & 63;
-    pkt.setPathHashSizeAndCount(1, n);
-    memcpy(pkt.path, path, n);
+    // Shared finaliser: applies extension decorators, signs, routes and sends.
+    return emitAdvert(*g_dispatcher, g_kernel, g_identity, g_rtc.now(), ad, flood);
   }
   uint32_t seq_ = 0;
   uint32_t rng_ = 0xC0FFEE11;

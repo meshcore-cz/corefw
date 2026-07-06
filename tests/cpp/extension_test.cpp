@@ -70,6 +70,22 @@ int main() {
   check(decoded.feat2 == 0x00A0, "feat2 survives round-trip");
   check(std::strcmp(decoded.name, "CoreFW CZ") == 0, "name survives round-trip");
 
+  // Runtime custom-var path: Kernel fans CMD_SET/GET_CUSTOM_VAR out to modules.
+  check(kernel.setConfigVar("advert.feat1", "0x00ff"), "kernel routes set to extension");
+  check(cz.feat1() == 0x00FF, "hex custom-var parsed");
+  check(kernel.setConfigVar("advert.feat2", "16"), "decimal custom-var accepted");
+  check(cz.feat2() == 16, "decimal custom-var parsed");
+  check(!kernel.setConfigVar("bogus.key", "1"), "unknown key not claimed");
+  char vars[128];
+  size_t vn = kernel.getConfigVars(vars, sizeof(vars));
+  vars[vn] = 0;
+  check(std::strcmp(vars, "advert.feat1:00ff,advert.feat2:0010") == 0, "custom-var list formatted");
+
+  // The next advert reflects the runtime-updated values.
+  proto::AdvertData ad2;
+  kernel.applyAdvertDecorators(ad2);
+  check(ad2.feat1 == 0x00FF && ad2.feat2 == 16, "runtime change reflected in advert");
+
   // A zero-valued extension leaves the fields omitted (wire-compatible default).
   CzAdvertFeatures off;
   Kernel k2;

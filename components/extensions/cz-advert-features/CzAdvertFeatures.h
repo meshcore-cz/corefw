@@ -21,6 +21,10 @@
 #include <corefw/Module.h>
 #include <corefw/protocol/AdvertData.h>
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 namespace corefw {
 
 class CzAdvertFeatures : public Module {
@@ -40,10 +44,32 @@ class CzAdvertFeatures : public Module {
     if (feat2_) ad.feat2 = feat2_;
   }
 
+  // Extension hooks: expose the flags over the companion custom-var command
+  // surface, so a paired app can read/change them at runtime — the corefw
+  // equivalent of `set/get advert.features`, over the existing protocol. The
+  // new value is picked up by the next self-advert via decorateAdvert().
+  bool setConfigVar(const char* name, const char* value) override {
+    if (std::strcmp(name, "advert.feat1") == 0) { feat1_ = parseU16(value); return true; }
+    if (std::strcmp(name, "advert.feat2") == 0) { feat2_ = parseU16(value); return true; }
+    return false;
+  }
+  size_t getConfigVars(char* out, size_t cap) override {
+    // "advert.feat1:XXXX,advert.feat2:YYYY" in hex, matching upstream's format.
+    int w = std::snprintf(out, cap, "advert.feat1:%04x,advert.feat2:%04x", feat1_, feat2_);
+    if (w < 0) return 0;
+    return (size_t(w) < cap) ? size_t(w) : cap;
+  }
+
   uint16_t feat1() const { return feat1_; }
   uint16_t feat2() const { return feat2_; }
 
  private:
+  // Parse a 16-bit value in decimal or 0x-prefixed hex (like upstream parseUInt16).
+  static uint16_t parseU16(const char* s) {
+    if (!s) return 0;
+    return uint16_t(std::strtoul(s, nullptr, 0) & 0xFFFF);
+  }
+
   uint16_t feat1_ = 0;
   uint16_t feat2_ = 0;
 };

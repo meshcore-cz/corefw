@@ -95,6 +95,8 @@ build:
 
 codegen:
   class: SenseCapSolarBoard
-  header: corefw/boards/SenseCapSolarBoard.h
+  header: SenseCapSolarBoard.h
+  sources:
+    - SenseCapSolarBoard.h
   var: board
   register: registerBoard
