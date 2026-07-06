@@ -1,25 +1,28 @@
 // CompanionModule — the companion role: bridges a phone/app to the mesh.
 //
 // It ties together the portable, host-tested Companion Protocol pieces: the
-// frame codec, the command handler, the OLED UI and the buzzer. The transport
-// (BLE/USB/TCP), display panel, buzzer output and device services (RTC,
-// battery, advert sending) are provided by the board at startup — this class
-// owns the orchestration, which is why it stays board-agnostic and testable.
+// frame codec, the full command handler, the OLED UI and the buzzer. The
+// transport (BLE/USB/TCP), display panel, buzzer output, device services and
+// radio send path are provided by the board at startup — this class owns the
+// orchestration, which is why it stays board-agnostic and testable.
 #pragma once
 
 #include <corefw/Mesh.h>
 #include <corefw/Module.h>
 #include <corefw/companion/Commands.h>
 #include <corefw/companion/FrameCodec.h>
+#include <corefw/companion/State.h>
 #include <corefw/companion/Transport.h>
+#include <corefw/protocol/Datagram.h>
 #include <corefw/runtime/Clock.h>
 #include <corefw/ui/Buzzer.h>
 #include <corefw/ui/CompanionUI.h>
+
 #include <cstring>
 
 namespace corefw {
 
-enum class CompanionTransport { BLE, USB, WiFi };
+enum class CompanionTransportKind { BLE, USB, WiFi };
 
 class CompanionModule : public Module {
  public:
@@ -27,22 +30,22 @@ class CompanionModule : public Module {
 
   // --- Configuration (from generated code) --------------------------------
   void setTransport(const char* t) {
-    if (std::strcmp(t, "usb") == 0) transport_kind_ = CompanionTransport::USB;
-    else if (std::strcmp(t, "wifi") == 0) transport_kind_ = CompanionTransport::WiFi;
-    else transport_kind_ = CompanionTransport::BLE;
+    if (std::strcmp(t, "usb") == 0) transport_kind_ = CompanionTransportKind::USB;
+    else if (std::strcmp(t, "wifi") == 0) transport_kind_ = CompanionTransportKind::WiFi;
+    else transport_kind_ = CompanionTransportKind::BLE;
   }
-  CompanionTransport transportKind() const { return transport_kind_; }
+  CompanionTransportKind transportKind() const { return transport_kind_; }
 
   // --- Board-provided services (wired by the target main) -----------------
   void attachTransport(companion::CompanionTransport* io) { io_ = io; }
   void attachHost(companion::CompanionHost* host) { host_ = host; }
+  void attachSender(companion::MeshSender* s) { sender_ = s; }
   void attachClock(Clock* clk) { clock_ = clk; }
   void attachDisplay(ui::Display* d) { display_ = d; }
   void attachBuzzer(ui::ToneOutput* b) {
     buzzer_ = b;
     melody_.setOutput(b);
   }
-  void configureState(const companion::CompanionState& s) { state_ = s; }
 
   companion::CompanionState& state() { return state_; }
   ui::CompanionUI& ui() { return ui_; }
@@ -61,13 +64,57 @@ class CompanionModule : public Module {
     refreshUI(now_ms);
   }
 
-  // Notify the module that a text message arrived from the mesh: bump unread,
-  // update the screen and beep.
-  void onMeshMessage(const char* preview) {
-    unread_++;
-    ui_.setUnread(unread_);
-    if (preview) ui_.setLastMessage(preview);
-    beep(ui::melodies::kMessage);
+  // --- Mesh receive path (called by the dispatcher when a message for this
+  //     node is decrypted). Builds the offline-queue frame the app fetches with
+  //     CMD_SYNC_NEXT_MESSAGE and pushes a MSG_WAITING tickle when connected.
+
+  // A decrypted direct text message from `from`. sender_timestamp/txt_type match
+  // the decrypted plaintext; path_len is the flood path length or 0xFF direct.
+  void onContactMessage(const companion::ContactInfo& from, uint8_t txt_type,
+                        uint32_t sender_timestamp, uint8_t path_len, int8_t snr_q4,
+                        const char* text) {
+    uint8_t f[companion::MAX_FRAME_SIZE];
+    size_t i = 0;
+    if (state_.app_target_ver >= 3) {
+      f[i++] = companion::RESP_CODE_CONTACT_MSG_RECV_V3;
+      f[i++] = uint8_t(snr_q4);
+      f[i++] = 0;  // reserved1
+      f[i++] = 0;  // reserved2
+    } else {
+      f[i++] = companion::RESP_CODE_CONTACT_MSG_RECV;
+    }
+    std::memcpy(&f[i], from.id.pub_key, 6); i += 6;
+    f[i++] = path_len;
+    f[i++] = txt_type;
+    i = proto::putU32LE(f, i, sender_timestamp);
+    size_t tlen = std::strlen(text);
+    if (i + tlen > companion::MAX_FRAME_SIZE) tlen = companion::MAX_FRAME_SIZE - i;
+    std::memcpy(&f[i], text, tlen); i += tlen;
+    enqueueAndNotify(f, int(i), from.name, text, path_len,
+                     txt_type == proto::TXT_TYPE_PLAIN || txt_type == proto::TXT_TYPE_SIGNED_PLAIN);
+  }
+
+  // A decrypted channel text message on `channel_idx`.
+  void onChannelMessage(uint8_t channel_idx, uint32_t timestamp, uint8_t path_len,
+                        int8_t snr_q4, const char* channel_name, const char* text) {
+    uint8_t f[companion::MAX_FRAME_SIZE];
+    size_t i = 0;
+    if (state_.app_target_ver >= 3) {
+      f[i++] = companion::RESP_CODE_CHANNEL_MSG_RECV_V3;
+      f[i++] = uint8_t(snr_q4);
+      f[i++] = 0;
+      f[i++] = 0;
+    } else {
+      f[i++] = companion::RESP_CODE_CHANNEL_MSG_RECV;
+    }
+    f[i++] = channel_idx;
+    f[i++] = path_len;
+    f[i++] = proto::TXT_TYPE_PLAIN;
+    i = proto::putU32LE(f, i, timestamp);
+    size_t tlen = std::strlen(text);
+    if (i + tlen > companion::MAX_FRAME_SIZE) tlen = companion::MAX_FRAME_SIZE - i;
+    std::memcpy(&f[i], text, tlen); i += tlen;
+    enqueueAndNotify(f, int(i), channel_name, text, path_len, true);
   }
 
   void onEvent(const Event& e) override {
@@ -84,22 +131,49 @@ class CompanionModule : public Module {
   bool connected() const { return connected_; }
 
  private:
+  // TransportWriter frames each handler response and writes it to the transport.
+  class TransportWriter : public companion::FrameWriter {
+   public:
+    explicit TransportWriter(companion::CompanionTransport* io) : io_(io) {}
+    void writeFrame(const uint8_t* data, size_t len) override {
+      if (!io_) return;
+      uint8_t out[companion::MAX_FRAME_SIZE + 3];
+      size_t n = companion::encodeFrame(out, data, len);
+      if (n > 0) io_->write(out, n);
+    }
+   private:
+    companion::CompanionTransport* io_;
+  };
+
   // Read inbound bytes, decode frames, run the command handler and reply.
   void pumpTransport() {
-    if (io_ == nullptr || host_ == nullptr) return;
+    if (io_ == nullptr || host_ == nullptr || sender_ == nullptr) return;
     uint8_t in[companion::MAX_FRAME_SIZE];
     size_t n = io_->read(in, sizeof(in));
     if (n == 0) return;
-    companion::CommandHandler handler(state_, *host_);
+    companion::CommandHandler handler(state_, *host_, *sender_);
+    TransportWriter writer(io_);
     decoder_.feed(in, n, frame_, [&](const uint8_t* payload, size_t plen) {
-      uint8_t resp[companion::MAX_FRAME_SIZE];
-      size_t rlen = handler.handle(payload, plen, resp);
-      if (rlen > 0) {
-        uint8_t out[companion::MAX_FRAME_SIZE + 3];
-        size_t olen = companion::encodeFrame(out, resp, rlen);
-        io_->write(out, olen);
-      }
+      handler.handle(payload, plen, writer);
     });
+  }
+
+  void enqueueAndNotify(const uint8_t* frame, int len, const char* who, const char* text,
+                        uint8_t path_len, bool display) {
+    state_.pushOffline(frame, len);
+    unread_++;
+    ui_.setUnread(unread_);
+    if (display) {
+      if (text) ui_.setLastMessage(text);
+      beep(ui::melodies::kMessage);
+    }
+    (void)who; (void)path_len;
+    if (connected_ && io_) {
+      uint8_t tickle[1] = {companion::PUSH_CODE_MSG_WAITING};
+      uint8_t out[4];
+      size_t nn = companion::encodeFrame(out, tickle, 1);
+      io_->write(out, nn);
+    }
   }
 
   void refreshUI(uint32_t now_ms) {
@@ -117,10 +191,11 @@ class CompanionModule : public Module {
   }
 
   Context* ctx_ = nullptr;
-  CompanionTransport transport_kind_ = CompanionTransport::BLE;
+  CompanionTransportKind transport_kind_ = CompanionTransportKind::BLE;
 
   companion::CompanionTransport* io_ = nullptr;
   companion::CompanionHost* host_ = nullptr;
+  companion::MeshSender* sender_ = nullptr;
   Clock* clock_ = nullptr;
   ui::Display* display_ = nullptr;
   ui::ToneOutput* buzzer_ = nullptr;

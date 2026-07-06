@@ -250,6 +250,7 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 		firmwareDir,
 		filepath.Join(firmwareDir, "drivers", "crypto", "ed25519"),
 		filepath.Join(firmwareDir, "drivers", "crypto", "sha256"),
+		filepath.Join(firmwareDir, "drivers", "crypto", "aes"),
 	}
 	for _, inc := range mb.Includes {
 		if filepath.IsAbs(inc) {

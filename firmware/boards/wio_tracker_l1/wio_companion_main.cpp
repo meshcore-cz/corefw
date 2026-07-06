@@ -66,7 +66,7 @@ static Dispatcher* g_dispatcher = nullptr;
 static Kernel g_kernel;
 static proto::LocalIdentity g_identity;
 
-// CompanionHost implementation backed by the board + RTC + mesh.
+// CompanionHost implementation: device services (RTC, battery, persistence).
 class WioCompanionHost : public companion::CompanionHost {
  public:
   uint32_t rtcNow() override { return g_rtc.now(); }
@@ -77,20 +77,92 @@ class WioCompanionHost : public companion::CompanionHost {
   const char* manufacturerName() override {
     return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Seeed Studio";
   }
-  void sendSelfAdvert(bool flood) override {
-    if (!g_dispatcher) return;
-    proto::AdvertData ad;
-    ad.type = proto::ADV_TYPE_CHAT;
-    // Name is carried by the companion state; keep the advert minimal here.
-    proto::Packet pkt;
-    if (proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) {
-      if (!flood) pkt.setPathHashSizeAndCount(1, 0);  // zero-hop
-      g_dispatcher->send(pkt);
-    }
-  }
+  // savePrefs/saveContacts/saveChannels persist to the board's flash store
+  // (elided in this reference; the portable command handler drives them).
 };
 
 static WioCompanionHost g_host;
+
+// set the route bits on a packet built by the datagram builders (which leave
+// route = 0), preserving the payload type.
+static void setRoute(proto::Packet& pkt, uint8_t route) {
+  pkt.header = uint8_t((pkt.header & ~proto::PH_ROUTE_MASK) | (route & proto::PH_ROUTE_MASK));
+}
+
+// WioMeshSender bridges the companion command handler to the radio scheduler.
+// Flood packets get ROUTE_FLOOD; packets with a known return path go ROUTE_DIRECT
+// with the path attached. The Dispatcher owns airtime/duty-cycle scheduling.
+class WioMeshSender : public companion::MeshSender {
+ public:
+  int sendToContact(proto::Packet& pkt, const companion::ContactInfo& c,
+                    uint32_t& est_timeout) override {
+    if (!g_dispatcher) return companion::SEND_FAILED;
+    if (c.out_path_len == companion::OUT_PATH_UNKNOWN) {
+      setRoute(pkt, proto::ROUTE_FLOOD);
+      pkt.setPathHashSizeAndCount(1, 0);
+      est_timeout = 8000;
+      g_dispatcher->send(pkt);
+      return companion::SEND_FLOOD;
+    }
+    setRoute(pkt, proto::ROUTE_DIRECT);
+    applyPath(pkt, c.out_path, c.out_path_len);
+    est_timeout = 3000;
+    g_dispatcher->send(pkt);
+    return companion::SEND_DIRECT;
+  }
+  bool sendGroup(proto::Packet& pkt) override {
+    if (!g_dispatcher) return false;
+    setRoute(pkt, proto::ROUTE_FLOOD);
+    pkt.setPathHashSizeAndCount(1, 0);
+    g_dispatcher->send(pkt);
+    return true;
+  }
+  bool sendDirect(proto::Packet& pkt, const uint8_t* path, uint8_t path_len) override {
+    if (!g_dispatcher) return false;
+    setRoute(pkt, proto::ROUTE_DIRECT);
+    applyPath(pkt, path, path_len);
+    g_dispatcher->send(pkt);
+    return true;
+  }
+  bool sendZeroHop(proto::Packet& pkt) override {
+    if (!g_dispatcher) return false;
+    setRoute(pkt, proto::ROUTE_FLOOD);
+    pkt.setPathHashSizeAndCount(1, 0);
+    g_dispatcher->send(pkt);
+    return true;
+  }
+  bool sendRawPacket(const uint8_t* wire, size_t len, uint8_t /*priority*/) override {
+    if (!g_dispatcher) return false;
+    proto::Packet pkt;
+    if (!pkt.readFrom(wire, len)) return false;
+    g_dispatcher->send(pkt);
+    return true;
+  }
+  bool sendSelfAdvert(bool flood) override {
+    if (!g_dispatcher) return false;
+    proto::AdvertData ad;
+    ad.type = proto::ADV_TYPE_CHAT;
+    proto::Packet pkt;
+    if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
+    setRoute(pkt, proto::ROUTE_FLOOD);
+    if (!flood) pkt.setPathHashSizeAndCount(1, 0);  // zero-hop
+    g_dispatcher->send(pkt);
+    return true;
+  }
+  uint32_t rtcNowUnique() override { return g_rtc.now() + (seq_++ & 0x3); }
+  uint32_t random32() override { rng_ = rng_ * 1664525u + 1013904223u; return rng_; }
+
+ private:
+  static void applyPath(proto::Packet& pkt, const uint8_t* path, uint8_t path_len) {
+    uint8_t n = path_len & 63;
+    pkt.setPathHashSizeAndCount(1, n);
+    memcpy(pkt.path, path, n);
+  }
+  uint32_t seq_ = 0;
+  uint32_t rng_ = 0xC0FFEE11;
+};
+
+static WioMeshSender g_sender;
 
 // findCompanion locates the CompanionModule the generated composition
 // registered, so we can attach the board's transport/display/buzzer to it.
@@ -126,9 +198,10 @@ void setup() {
 
   // 5. Attach everything to the companion module and start the kernel.
   if (CompanionModule* comp = findCompanion()) {
-    memcpy(comp->state().self_pub, g_identity.pub_key, proto::PUB_KEY_SIZE);
+    comp->state().self = g_identity;
     comp->attachClock(&g_clock);
     comp->attachHost(&g_host);
+    comp->attachSender(&g_sender);
     comp->attachTransport(&g_ble);
     comp->attachDisplay(&g_display);
     comp->attachBuzzer(&g_buzzer);
