@@ -65,6 +65,7 @@ statically composed PlatformIO firmware project.`,
 
 	commandDeps := commandDeps{Dependencies: deps, Root: &rootOpts}
 	cmd.AddCommand(
+		newPrepareCommand(commandDeps),
 		newBuildCommand(commandDeps),
 		newFlashCommand(commandDeps),
 		newMonitorCommand(commandDeps),

@@ -89,6 +89,43 @@ func TestBuildReceivesFlags(t *testing.T) {
 	}
 }
 
+func TestPrepareReceivesFlags(t *testing.T) {
+	var got build.Options
+	deps := testDeps()
+	deps.BuildRunner = BuildRunnerFunc(func(ctx context.Context, opts build.Options) (*build.Result, error) {
+		got = opts
+		return &build.Result{OutDir: opts.OutDir, Gen: &codegen.Result{EnvName: "env", Files: []string{"platformio.ini"}}}, nil
+	})
+	stdout, _, err := executeCommand(t, deps, "prepare", "profile.yaml", "--out", "build/custom", "--firmware", "fw")
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if got.ProfilePath != "profile.yaml" || got.OutDir != "build/custom" || got.FirmwareDir != "fw" || got.Compile || got.Upload {
+		t.Fatalf("unexpected prepare opts: %+v", got)
+	}
+	if !strings.Contains(stdout, "Build with: pio run -e env -d build/custom") {
+		t.Fatalf("prepare output = %s", stdout)
+	}
+}
+
+func TestBuildReportsArtifacts(t *testing.T) {
+	deps := testDeps()
+	deps.BuildRunner = BuildRunnerFunc(func(ctx context.Context, opts build.Options) (*build.Result, error) {
+		return &build.Result{
+			OutDir:    "build/x",
+			Gen:       &codegen.Result{EnvName: "env", Files: []string{"platformio.ini"}},
+			Artifacts: []string{"build/x/.pio/build/env/firmware.bin", "build/x/.pio/build/env/firmware.elf"},
+		}, nil
+	})
+	stdout, _, err := executeCommand(t, deps, "build", "profile.yaml")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if !strings.Contains(stdout, "Built firmware artifacts") || !strings.Contains(stdout, "firmware.bin") {
+		t.Fatalf("build output = %s", stdout)
+	}
+}
+
 func TestBuildResolvesBuiltinProfileName(t *testing.T) {
 	var got build.Options
 	deps := testDeps()

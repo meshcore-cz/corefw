@@ -64,8 +64,12 @@ $ corefw build profiles/heltec-v3-repeater.yaml --firmware firmware
 Generate only, without running PlatformIO:
 
 ```console
-$ corefw build profiles/heltec-v3-repeater.yaml --no-compile
+$ corefw prepare heltec-v3-repeater
+$ corefw prepare profiles/heltec-v3-repeater.yaml --out build/custom
 ```
+
+`corefw build <profile> --no-compile` is still accepted for compatibility, but
+`corefw prepare <profile>` is preferred.
 
 Flash a connected device:
 
@@ -117,6 +121,7 @@ or directories that do not look like generated corefw/PlatformIO output.
 
 ```text
 corefw
+├── prepare <profile>
 ├── build <profile>
 ├── flash <profile>
 ├── validate <profile>

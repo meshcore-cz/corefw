@@ -46,7 +46,7 @@ $ ./corefw validate heltec-v3-repeater
 
 # build compiles the firmware with PlatformIO by default:
 $ ./corefw build heltec-v3-repeater
-$ ./corefw build heltec-v3-repeater --no-compile   # just generate
+$ ./corefw prepare heltec-v3-repeater   # just generate
 
 # flash builds and uploads to a connected device:
 $ ./corefw flash heltec-v3-repeater --port /dev/ttyUSB0
@@ -99,7 +99,8 @@ workflow examples, JSON output options and shell completion setup.
 
 | Command | Purpose |
 | --- | --- |
-| `corefw build <profile>` | Resolve, generate and compile a firmware image (`--no-compile` to skip) |
+| `corefw prepare <profile>` | Resolve and generate a PlatformIO project without compiling |
+| `corefw build <profile>` | Compile firmware and report produced artifacts |
 | `corefw flash <profile>` | Build and upload to a connected device (`--port`, `--monitor`) |
 | `corefw validate <profile>` | Validate a profile and component graph without generation |
 | `corefw plan <profile>` | Show the resolved composition before generating firmware |

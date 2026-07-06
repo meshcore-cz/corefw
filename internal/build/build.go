@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -45,6 +46,7 @@ type Result struct {
 	OutDir     string
 	PIOLog     string
 	UploadPort string
+	Artifacts  []string
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -170,8 +172,28 @@ func Run(opts Options) (*Result, error) {
 		if err != nil {
 			return res, err
 		}
+		res.Artifacts = detectArtifacts(outDir, gen.EnvName)
 	}
 	return res, nil
+}
+
+func detectArtifacts(outDir, env string) []string {
+	buildDir := filepath.Join(outDir, ".pio", "build", env)
+	names := []string{
+		"firmware.bin",
+		"firmware.hex",
+		"firmware.uf2",
+		"firmware.zip",
+		"firmware.elf",
+	}
+	var out []string
+	for _, name := range names {
+		path := filepath.Join(buildDir, name)
+		if _, err := os.Stat(path); err == nil {
+			out = append(out, path)
+		}
+	}
+	return out
 }
 
 func verb(upload bool) string {
