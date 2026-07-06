@@ -237,7 +237,10 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 			defines = append(defines, fmt.Sprintf("-D %s=%s", k, v))
 		}
 	}
-	libDeps := append(append([]string{}, corefwBaseLibs...), mb.LibDeps...)
+	// Add the corefw firmware tree itself as a library (symlink:// references a
+	// specific directory, unlike lib_extra_dirs which scans for sub-libraries).
+	libDeps := append([]string{"symlink://" + firmwareDir}, corefwBaseLibs...)
+	libDeps = append(libDeps, mb.LibDeps...)
 
 	// Include paths: the kernel public headers (<corefw/...>) and the firmware
 	// root (<drivers/...>, <boards/...>), then any board-specific include dirs.

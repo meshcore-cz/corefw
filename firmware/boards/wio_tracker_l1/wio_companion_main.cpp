@@ -152,7 +152,8 @@ void loop() {
   if (CompanionModule* comp = findCompanion()) {
     bool nowConnected = g_ble.connected();
     if (nowConnected != wasConnected) {
-      Event e{nowConnected ? EventType::CompanionConnected : EventType::CompanionDisconnected};
+      Event e;
+      e.type = nowConnected ? EventType::CompanionConnected : EventType::CompanionDisconnected;
       g_kernel.dispatch(e);
       wasConnected = nowConnected;
     }

@@ -66,6 +66,9 @@ build:
     LORA_TX_POWER: "22"
   src_filter:
     - +<boards/wio_tracker_l1/*.cpp>
+  lib_deps:
+    - adafruit/Adafruit SH110X @ ^2.1.13
+    - adafruit/Adafruit GFX Library @ ^1.12.1
 
 codegen:
   class: WioTrackerL1Board
