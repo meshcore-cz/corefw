@@ -26,7 +26,12 @@ interoperate on the same mesh as existing MeshCore firmware. The tooling
 
 > Status: MVP. Two official boards (Heltec V3, Wio Tracker L1), repeater +
 > companion modules, one power policy, local + git external components,
-> reproducible lockfiles.
+> reproducible lockfiles. The **Wio Tracker L1 companion** is functionally
+> complete on the portable layer: all 65 Companion-Protocol commands, encrypted
+> direct/group messaging (send **and** receive), contacts & channels, and
+> MeshCore-compatible flash storage — see
+> [Flashing over MeshCore](#flashing-over-meshcore) and
+> [docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md). Not yet run on real hardware.
 
 ---
 
@@ -104,18 +109,22 @@ components/           built-in ("official") components (embedded in the binary)
   policies/           simple-power
 firmware/             the C++ kernel & component implementations
   kernel/             mechanisms: protocol, events, power, Kernel API
-    protocol/         wire-compatible Packet, AdvertData, Identity, Advert, PacketHash
+    protocol/         wire-compatible Packet, AdvertData, Identity, Advert, PacketHash,
+                      MessageCrypto (AES-128 + HMAC), Datagram (direct/group/anon builders)
     runtime/          Dispatcher (radio scheduler), FloodRouter, Dedup, Airtime, Clock
-    companion/        Companion Protocol: frame codec, all CMD/RESP/PUSH codes, command handler
+    companion/        Companion Protocol: frame codec, all 65 CMD codes + RESP/PUSH,
+                      command handler, contacts/channels/offline stores, RX decrypt
+                      (Receiver), byte-compatible flash storage (StorageCodec/Storage)
     ui/               CompanionUI (OLED screen model) + RTTTL buzzer/melody sequencer
     include/corefw/   the public Board/Module/Policy/Mesh/Radio/Kernel API
   drivers/
     crypto/ed25519/   vendored orlp/ed25519 (same lib as MeshCore) — see its LICENSE
-    crypto/sha256/    packet-hash digest (matches Core Protocol packet hash)
+    crypto/sha256/    packet-hash + HMAC digest (matches Core Protocol packet hash)
+    crypto/aes/       AES-128 block cipher (message-payload encryption, FIPS-197)
     radio/sx1262/     SX1262 RadioDriver (target-only, RadioLib)
     display/sh1106/   SH1106 OLED driver (target-only, Adafruit)
     buzzer/           Arduino tone() buzzer output (target-only)
-  boards/wio_tracker_l1/  BLE transport + companion entrypoint (target-only)
+  boards/wio_tracker_l1/  BLE transport + InternalFS store + companion entrypoint (target-only)
 profiles/             example build profiles
 examples/             an example external component
 docs/                 architecture & how-to guides
@@ -130,14 +139,14 @@ $ make verify-gen  # generate both example profiles and compile the C++ roots
 
 The C++ protocol tests assert **exact byte layouts** against MeshCore V1, so any
 change that would break mesh interoperability fails on a workstation before it
-ever reaches a radio. The identity tests go further and reproduce MeshCore's own
-embedded X25519 key-exchange test vector, proving the Ed25519/ECDH crypto is
-byte-compatible (corefw vendors the same `orlp/ed25519` library). The companion
-tests verify the Companion Protocol framing (`>`/`<` + LE16 length) and the full
-command/response/push code set match the reference companion firmware, so
-existing MeshCore phone apps connect unchanged.
+ever reaches a radio. Several tests go further and reproduce MeshCore's *own*
+embedded/standard vectors: the X25519 key-exchange vector (proving Ed25519/ECDH
+is byte-compatible — corefw vendors the same `orlp/ed25519`), the FIPS-197 AES
+vector and the RFC 4231 HMAC vector (message encryption), and the storage tests
+pin every record field offset so a corefw flash reads an existing device's data
+correctly.
 
-**Protocol compatibility, verified on the host:**
+**Protocol & app compatibility, verified on the host (11 suites):**
 
 | Layer | What matches MeshCore | Test |
 | --- | --- | --- |
@@ -146,9 +155,31 @@ existing MeshCore phone apps connect unchanged.
 | Identity / ECDH | Ed25519 + X25519 (same `orlp/ed25519`) | `identity_test.cpp` (MeshCore vector) |
 | Packet hash / dedup | `SHA256(type‖payload)[:8]` | `runtime_test.cpp` |
 | Repeater (flood) | append-path forward, echo suppression, duty cycle | `runtime_test.cpp` |
+| Message crypto | AES-128 + `encryptThenMAC`/`MACThenDecrypt` | `crypto_msg_test.cpp` (FIPS-197, RFC 4231) |
+| Datagram builders | direct / group / anon layout + plaintext | `datagram_test.cpp` (ECDH round-trip) |
 | Companion framing | `>`/`<` + LE16 length, split/resync | `companion_test.cpp` |
-| Companion commands | DEVICE_INFO / SELF_INFO / time / batt / config frames | `commands_test.cpp` |
+| Companion commands | **all 65 CMD codes** — config, contacts, channels, messaging, requests, signing | `commands_test.cpp` |
+| Receive path | decrypt inbound direct/group msgs + verify adverts | `receiver_test.cpp` (A→B interop) |
+| Flash storage | identity / prefs / contacts / channels record layouts | `storage_test.cpp` (offset-pinned) |
 | Companion UI + beeps | OLED screen model, RTTTL melody sequencing | `ui_test.cpp` |
+
+## Flashing over MeshCore
+
+A corefw Wio Tracker L1 image is **safe to flash onto a device already running
+stock MeshCore** — it will not brick the device and it preserves the node's
+stored identity and preferences:
+
+- **No brick.** corefw builds against the *byte-identical* board definition
+  MeshCore uses (same SoftDevice S140 7.3.0, same bootloader). A USB flash writes
+  only the application region; the MBR, SoftDevice and bootloader are untouched.
+- **Data preserved.** corefw reads/writes the same on-flash files in the same
+  byte formats as MeshCore's `DataStore` (`/identity/_main.id`, `/new_prefs`,
+  `/contacts3`, `/channels2`). It mounts the existing filesystem and **never
+  formats** it, so the node keeps its identity (its mesh address) and settings.
+  Only an explicit factory-reset command erases anything.
+
+Full details, the flash memory map, and one caveat (contacts on the companion's
+QSPI layout) are in [docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md).
 
 ## Design
 

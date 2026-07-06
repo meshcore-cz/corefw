@@ -40,6 +40,8 @@ cpp-test: crypto-objs
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/datagram_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_dgtest && /tmp/corefw_dgtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/companion_test.cpp -o /tmp/corefw_ctest && /tmp/corefw_ctest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/commands_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_cmdtest && /tmp/corefw_cmdtest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/storage_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_storetest && /tmp/corefw_storetest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/receiver_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_rxtest && /tmp/corefw_rxtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/ui_test.cpp -o /tmp/corefw_uitest && /tmp/corefw_uitest
 
 # Compile the vendored orlp/ed25519 and SHA-256 sources as C into build/obj.

@@ -73,6 +73,10 @@ flood is delivered and re-broadcast with the node's hash appended; duplicates an
 echoes are dropped; and a second transmission is held until the duty cycle
 permits.
 
+Modules receive by implementing `PacketSink` and subscribing to the Dispatcher:
+every delivered packet is offered to each sink. The companion role uses this to
+decrypt packets addressed to the node (see *The companion role* below).
+
 ### Central power coordination
 
 Modules submit *requirements*; the `PowerCoordinator` decides the schedule:
@@ -93,6 +97,59 @@ placement and advert layout all match the reference firmware, and
 `protocol_test.cpp` pins them with exact-byte assertions. Crypto identity is
 Ed25519 with the same signed-message construction
 (`pub_key || timestamp || app_data`).
+
+### Message encryption
+
+Direct, group and request payloads are encrypted exactly as the reference
+firmware's `Utils::encryptThenMAC` / `MACThenDecrypt`: AES-128 in ECB over the
+zero-padded plaintext, prefixed with a 2-byte HMAC-SHA256 tag. The AES key is the
+first 16 bytes of the secret; the HMAC key is the full 32-byte secret. For a
+direct message the secret is the Ed25519→X25519 ECDH shared secret; for a channel
+it is the 32-byte channel key (a 128-bit channel uses the low 16 bytes, the rest
+zero). `MessageCrypto.h` implements this and `Datagram.h` assembles the packets
+(`dest_hash || src_hash || enc` for direct, `channel_hash || enc` for group,
+`dest_hash || sender_pubkey || enc` for anonymous requests) with the same inner
+plaintext layouts (`timestamp || flags || text`, `"sender: text"` for groups).
+`crypto_msg_test.cpp` checks the FIPS-197 AES and RFC 4231 HMAC vectors;
+`datagram_test.cpp` round-trips a message through ECDH and decrypts it back.
+
+### The companion role
+
+`firmware/kernel/companion/` implements the Companion Protocol — the framed
+request/response/push channel to a phone or desktop app over BLE/USB. It is fully
+portable and host-tested, so a corefw companion talks to existing MeshCore apps
+unchanged.
+
+- **`FrameCodec`** — `>`/`<` + LE16-length framing, with a streaming decoder that
+  tolerates split reads.
+- **`CommandHandler`** — handles **all 65 `CMD_*` codes** byte-exactly: device
+  info, self info, time, radio params, contacts (add/remove/get/reset-path),
+  channels, direct & group messaging, login/anon/status/telemetry/binary
+  requests, path discovery, signing, raw/trace/control packets, stats, flood
+  scopes and tuning. It writes replies through a `FrameWriter` callback so a
+  single command can stream several frames (`GET_CONTACTS` →
+  `CONTACTS_START` · `CONTACT`×N · `END_OF_CONTACTS`). Device services reach the
+  board through `CompanionHost`; outbound packets go through a `MeshSender` seam
+  so the handler never touches the radio directly.
+- **`Receiver`** — the receive path. As a `PacketSink` it decrypts inbound
+  packets addressed to this node: direct text (matched to a contact by the 1-byte
+  source hash, decrypted with the ECDH secret), group text (matched to a channel
+  by its hash), and adverts (signature-verified, then auto-added as contacts).
+  Decoded messages are delivered to the app via the offline queue plus a
+  `MSG_WAITING` push. `receiver_test.cpp` proves node-A-send → node-B-decrypt
+  interop for direct, group and advert traffic.
+- **Contacts, channels and the offline message queue** live in `CompanionState`.
+
+### Storage & flash safety
+
+The companion persists identity, preferences, contacts and channels through a
+tiny `FileStore` backend (`Storage.h`) using codecs (`StorageCodec.h`) that match
+MeshCore's `DataStore` **byte for byte** — same file names, same record layouts.
+`storage_test.cpp` pins every field offset. Because the formats and the (fixed)
+InternalFS location match, a Wio Tracker L1 already running MeshCore can be
+reflashed with corefw and keeps its identity and settings; the store mounts and
+never formats. The full memory map and guarantees are in
+[FLASH-SAFETY.md](FLASH-SAFETY.md).
 
 ## The build pipeline (Go)
 

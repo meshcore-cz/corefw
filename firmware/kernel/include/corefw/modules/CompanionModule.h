@@ -11,6 +11,7 @@
 #include <corefw/Module.h>
 #include <corefw/companion/Commands.h>
 #include <corefw/companion/FrameCodec.h>
+#include <corefw/companion/Receiver.h>
 #include <corefw/companion/State.h>
 #include <corefw/companion/Transport.h>
 #include <corefw/protocol/Datagram.h>
@@ -24,9 +25,18 @@ namespace corefw {
 
 enum class CompanionTransportKind { BLE, USB, WiFi };
 
-class CompanionModule : public Module {
+// CompanionModule is also a PacketSink (subscribe it to the Dispatcher so mesh
+// packets addressed to this node are decrypted) and a MessageReceiver::Sink
+// (the decrypted results come back to onContactMessage/onChannelMessage).
+class CompanionModule : public Module,
+                        public PacketSink,
+                        public companion::MessageReceiver::Sink {
  public:
   const char* name() const override { return "companion"; }
+
+  // PacketSink: hand each delivered packet to the receiver (which filters by
+  // dest hash / channel and decrypts). Returns true if consumed.
+  bool onPacket(const proto::Packet& pkt) override { return receiver_.handle(pkt); }
 
   // --- Configuration (from generated code) --------------------------------
   void setTransport(const char* t) {
@@ -72,7 +82,7 @@ class CompanionModule : public Module {
   // the decrypted plaintext; path_len is the flood path length or 0xFF direct.
   void onContactMessage(const companion::ContactInfo& from, uint8_t txt_type,
                         uint32_t sender_timestamp, uint8_t path_len, int8_t snr_q4,
-                        const char* text) {
+                        const char* text) override {
     uint8_t f[companion::MAX_FRAME_SIZE];
     size_t i = 0;
     if (state_.app_target_ver >= 3) {
@@ -96,7 +106,7 @@ class CompanionModule : public Module {
 
   // A decrypted channel text message on `channel_idx`.
   void onChannelMessage(uint8_t channel_idx, uint32_t timestamp, uint8_t path_len,
-                        int8_t snr_q4, const char* channel_name, const char* text) {
+                        int8_t snr_q4, const char* channel_name, const char* text) override {
     uint8_t f[companion::MAX_FRAME_SIZE];
     size_t i = 0;
     if (state_.app_target_ver >= 3) {
@@ -115,6 +125,25 @@ class CompanionModule : public Module {
     if (i + tlen > companion::MAX_FRAME_SIZE) tlen = companion::MAX_FRAME_SIZE - i;
     std::memcpy(&f[i], text, tlen); i += tlen;
     enqueueAndNotify(f, int(i), channel_name, text, path_len, true);
+  }
+
+  // A verified advert. Push NEW_ADVERT (full contact) for a freshly-added
+  // contact, or ADVERT (pubkey only) for a refresh, matching the reference.
+  void onAdvert(const companion::ContactInfo& contact, bool is_new) override {
+    if (is_new) dirty_ = true;
+    if (!connected_ || io_ == nullptr) return;
+    uint8_t f[companion::MAX_FRAME_SIZE];
+    size_t n;
+    if (is_new) {
+      n = companion::writeContactRespFrame(companion::PUSH_CODE_NEW_ADVERT, contact, f);
+    } else {
+      f[0] = companion::PUSH_CODE_ADVERT;
+      std::memcpy(&f[1], contact.id.pub_key, proto::PUB_KEY_SIZE);
+      n = 1 + proto::PUB_KEY_SIZE;
+    }
+    uint8_t out[companion::MAX_FRAME_SIZE + 3];
+    size_t on = companion::encodeFrame(out, f, n);
+    if (on > 0) io_->write(out, on);
   }
 
   void onEvent(const Event& e) override {
@@ -201,6 +230,7 @@ class CompanionModule : public Module {
   ui::ToneOutput* buzzer_ = nullptr;
 
   companion::CompanionState state_;
+  companion::MessageReceiver receiver_{state_, *this};
   companion::FrameDecoder decoder_;
   uint8_t frame_[companion::MAX_FRAME_SIZE] = {};
 

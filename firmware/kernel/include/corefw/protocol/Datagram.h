@@ -35,12 +35,17 @@ inline constexpr uint16_t DATA_TYPE_DEV = 0xFFFF;
 // MAX_TEXT_LEN mirrors BaseChatMesh.h (10 * CIPHER_BLOCK_SIZE).
 inline constexpr size_t MAX_TEXT_LEN = 10 * CIPHER_BLOCK_SIZE;
 
-// GroupChannel — a symmetric-key channel. `hash` is sha256(secret)[0].
+// GroupChannel — a symmetric-key channel. The secret is a full 32 bytes (like
+// the reference GroupChannel), because the HMAC in encryptThenMAC keys on all
+// PUB_KEY_SIZE bytes; a 128-bit channel uses the low 16 with the upper 16 zero.
+// `hash` is sha256(secret[:16])[0], matching the reference (which hashes keylen
+// bytes = 16 for a 128-bit key).
 struct GroupChannel {
   uint8_t hash[PATH_HASH_SIZE] = {};
-  uint8_t secret[16] = {};
+  uint8_t secret[PUB_KEY_SIZE] = {};
 
   void setSecret(const uint8_t key[16]) {
+    std::memset(secret, 0, sizeof(secret));
     std::memcpy(secret, key, 16);
     uint8_t digest[32];
     corefw_sha256(secret, 16, digest);

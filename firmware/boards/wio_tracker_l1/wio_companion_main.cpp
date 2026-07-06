@@ -21,7 +21,10 @@
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
 
+#include <corefw/companion/Storage.h>
+
 #include "NRF52BLETransport.h"
+#include "NRF52FileStore.h"
 // These live outside the kernel include root; the generated build adds -I firmware.
 #include <drivers/buzzer/ArduinoBuzzer.h>
 #include <drivers/display/sh1106/SH1106Display.h>
@@ -65,8 +68,13 @@ static ui::ArduinoBuzzer g_buzzer(PIN_BUZZER);
 static Dispatcher* g_dispatcher = nullptr;
 static Kernel g_kernel;
 static proto::LocalIdentity g_identity;
+static board::NRF52FileStore g_fs;
+static companion::PersistentStore g_store(g_fs);
+static CompanionModule* g_companion = nullptr;  // resolved in setup()
 
 // CompanionHost implementation: device services (RTC, battery, persistence).
+// Persistence flows through the byte-compatible PersistentStore, so writes land
+// in the exact MeshCore file formats.
 class WioCompanionHost : public companion::CompanionHost {
  public:
   uint32_t rtcNow() override { return g_rtc.now(); }
@@ -74,11 +82,21 @@ class WioCompanionHost : public companion::CompanionHost {
   uint16_t batteryMilliVolts() override {
     return g_kernel.board() ? g_kernel.board()->batteryMilliVolts() : 0;
   }
+  uint32_t storageUsedKb() override { return g_fs.usedKb(); }
+  uint32_t storageTotalKb() override { return g_fs.totalKb(); }
   const char* manufacturerName() override {
     return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Seeed Studio";
   }
-  // savePrefs/saveContacts/saveChannels persist to the board's flash store
-  // (elided in this reference; the portable command handler drives them).
+  void savePrefs() override { if (g_companion) g_store.savePrefs(g_companion->state()); }
+  void saveContacts() override { if (g_companion) g_store.saveContacts(g_companion->state()); }
+  void saveChannels() override { if (g_companion) g_store.saveChannels(g_companion->state()); }
+  bool factoryReset() override {
+    // Only an explicit CMD_FACTORY_RESET erases stored data.
+    g_fs.remove(companion::PREFS_FILE);
+    g_fs.remove(companion::CONTACTS_FILE);
+    g_fs.remove(companion::CHANNELS_FILE);
+    return true;
+  }
 };
 
 static WioCompanionHost g_host;
@@ -178,18 +196,30 @@ void setup() {
   // 1. Bring up the board (buses, radio, power rails) via the composition root.
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
+  g_companion = findCompanion();
 
-  // 2. Load or create this node's identity (persisted by the board's storage;
-  //    a fresh device generates one).
-  //    ... storage load elided in this reference ...
+  // 2. Mount the existing filesystem (never formats) and load identity, prefs,
+  //    contacts and channels in MeshCore's on-flash formats. A device reflashed
+  //    from MeshCore keeps its identity (mesh address) and data. Only a fresh
+  //    device generates a new identity here (seeded from the hardware RNG).
+  g_fs.begin();
+  if (g_companion) {
+    uint8_t seed[proto::SEED_SIZE];
+    for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(random(256));
+    g_store.loadAll(g_companion->state(), seed);
+    g_identity = g_companion->state().self;
+  }
 
   // 3. Build the radio scheduler around the board's configured radio.
   RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
   RadioConfig cfg;
-  cfg.tx_power_dbm = int8_t(g_kernel.powerPolicy() ? 22 : 22);
+  cfg.tx_power_dbm = g_companion ? g_companion->state().tx_power_dbm : 22;
   static Dispatcher dispatcher(radio, &g_clock, g_identity.pub_key, cfg);
   g_dispatcher = &dispatcher;
   if (radio) radio->begin(cfg);
+  // Deliver received packets to the companion, which decrypts those addressed
+  // to this node and surfaces messages/adverts to the app.
+  if (g_companion) dispatcher.subscribe(g_companion);
 
   // 4. Peripherals for the companion experience.
   g_display.begin();
@@ -197,8 +227,8 @@ void setup() {
   g_ble.begin(/*name=*/"corefw-wio", BLE_PIN_CODE);
 
   // 5. Attach everything to the companion module and start the kernel.
-  if (CompanionModule* comp = findCompanion()) {
-    comp->state().self = g_identity;
+  if (g_companion) {
+    CompanionModule* comp = g_companion;
     comp->attachClock(&g_clock);
     comp->attachHost(&g_host);
     comp->attachSender(&g_sender);
@@ -222,7 +252,7 @@ void loop() {
 
   // Reflect BLE connection state as kernel events, then pump the companion.
   static bool wasConnected = false;
-  if (CompanionModule* comp = findCompanion()) {
+  if (g_companion) {
     bool nowConnected = g_ble.connected();
     if (nowConnected != wasConnected) {
       Event e;
@@ -230,7 +260,7 @@ void loop() {
       g_kernel.dispatch(e);
       wasConnected = nowConnected;
     }
-    comp->tick(now);
+    g_companion->tick(now);
   }
 }
 
