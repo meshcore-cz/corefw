@@ -282,6 +282,14 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 	case "esp32":
 		defines = append(defines, "-D ESP32_PLATFORM=1")
 	}
+	// Emit COREFW_HAS_<MODULE> for each selected module so the per-arch platform
+	// mains can guard concrete module wiring (include + usage) on what the
+	// profile actually selected. This is what lets a role module's header live in
+	// its own component directory and be copied only when selected, without
+	// breaking single-role builds.
+	for _, m := range plan.Modules {
+		defines = append(defines, "-D COREFW_HAS_"+strings.ToUpper(slug(m.ID()))+"=1")
+	}
 	for _, k := range mb.sortedDefines() {
 		v := mb.Defines[k]
 		if v == "" {

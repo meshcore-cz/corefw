@@ -29,7 +29,9 @@ build:
 
 codegen:
   class: RepeaterModule
-  header: corefw/modules/RepeaterModule.h
+  header: RepeaterModule.h
+  sources:
+    - RepeaterModule.h
   var: repeater
   register: registerModule
   setters:

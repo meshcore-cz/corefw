@@ -20,7 +20,9 @@
 #include <cstring>
 
 #include <corefw/modules/CompanionModule.h>
-#include <corefw/modules/RepeaterModule.h>
+#if COREFW_HAS_REPEATER
+#include <RepeaterModule.h>  // self-encapsulated component; copied in when selected
+#endif
 #include <corefw/protocol/Advert.h>
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
@@ -87,7 +89,9 @@ static proto::LocalIdentity g_identity;
 static board::ESP32FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+#if COREFW_HAS_REPEATER
 static RepeaterModule* g_repeater = nullptr;    // resolved in setup() when selected
+#endif
 static companion::CompanionTransport* g_transport = nullptr;
 static bool g_radio_ok = false;
 
@@ -246,11 +250,13 @@ class HeltecMeshSender : public companion::MeshSender {
                       g_companion ? g_companion->state().node_name : "corefw",
                       flood);
   }
+#if COREFW_HAS_REPEATER
   bool sendRepeaterAdvert(bool flood) {
     return sendAdvert(proto::ADV_TYPE_REPEATER,
                       g_repeater ? g_repeater->advertName() : "repeater",
                       flood);
   }
+#endif
   bool sendAck(const uint8_t* ack, uint8_t ack_len, const companion::ContactInfo& to) override {
     if (!g_dispatcher) return false;
     proto::Packet pkt;
@@ -302,6 +308,7 @@ static CompanionModule* findCompanion() {
   return nullptr;
 }
 
+#if COREFW_HAS_REPEATER
 static RepeaterModule* findRepeater() {
   for (int i = 0; i < g_kernel.moduleCount(); ++i) {
     Module* m = g_kernel.module(i);
@@ -309,6 +316,7 @@ static RepeaterModule* findRepeater() {
   }
   return nullptr;
 }
+#endif
 
 static void showStage(const char* line1, const char* line2 = "") {
   if (!g_display.isOn()) return;
@@ -361,7 +369,9 @@ void setup() {
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
   g_companion = findCompanion();
+#if COREFW_HAS_REPEATER
   g_repeater = findRepeater();
+#endif
 
   // Bring up the display early so startup stages are visible on the OLED.
   bool display_ok = g_display.begin();
@@ -469,6 +479,7 @@ void loop() {
     g_companion->tick(now);
   }
 
+#if COREFW_HAS_REPEATER
   if (g_repeater && g_companion && g_radio_ok) {
     static bool boot_advert_sent = false;
     static uint32_t last_advert_ms = 0;
@@ -482,6 +493,7 @@ void loop() {
       last_advert_ms = now;
     }
   }
+#endif
 
 #if defined(COREFW_ESP32_POWERSAVE)
   // Power: opt-in MCU light-sleep for ESP32 builds (default OFF). Unlike the

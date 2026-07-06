@@ -24,7 +24,9 @@
 #include <Arduino.h>
 
 #include <corefw/modules/CompanionModule.h>
-#include <corefw/modules/RepeaterModule.h>
+#if COREFW_HAS_REPEATER
+#include <RepeaterModule.h>  // self-encapsulated component; copied in when selected
+#endif
 #include <corefw/protocol/Advert.h>
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
@@ -128,7 +130,9 @@ extern "C" __attribute__((naked)) void HardFault_Handler(void) {
 }
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+#if COREFW_HAS_REPEATER
 static RepeaterModule* g_repeater = nullptr;    // resolved in setup() when selected
+#endif
 static companion::CompanionTransport* g_transport = nullptr;
 static bool g_radio_ok = false;
 
@@ -278,11 +282,13 @@ class WioMeshSender : public companion::MeshSender {
     return sendAdvert(proto::ADV_TYPE_CHAT,
                       g_companion ? g_companion->state().node_name : "corefw", flood);
   }
+#if COREFW_HAS_REPEATER
   // Repeater self-advert (ADV_TYPE_REPEATER) so peers learn this is a relay.
   bool sendRepeaterAdvert(bool flood) {
     return sendAdvert(proto::ADV_TYPE_REPEATER,
                       g_repeater ? g_repeater->advertName() : "repeater", flood);
   }
+#endif
   bool sendAck(const uint8_t* ack, uint8_t ack_len, const companion::ContactInfo& to) override {
     if (!g_dispatcher) return false;
     proto::Packet pkt;
@@ -374,6 +380,7 @@ static CompanionModule* findCompanion() {
   return nullptr;
 }
 
+#if COREFW_HAS_REPEATER
 // findRepeater locates the RepeaterModule when the profile selected the repeater
 // role, so the loop can drive its periodic self-advert.
 static RepeaterModule* findRepeater() {
@@ -383,6 +390,7 @@ static RepeaterModule* findRepeater() {
   }
   return nullptr;
 }
+#endif
 
 static void showStage(const char* line1, const char* line2 = "") {
   // Serial breadcrumb: the last stage printed before silence is where a freeze
@@ -436,7 +444,9 @@ void setup() {
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
   g_companion = findCompanion();
+#if COREFW_HAS_REPEATER
   g_repeater = findRepeater();
+#endif
 
   // Serial debug console: usable whenever the USB CDC is not the companion
   // protocol transport (i.e. BLE builds), so it never corrupts framing.
@@ -619,6 +629,7 @@ void loop() {
     g_companion->tick(now);
   }
 
+#if COREFW_HAS_REPEATER
   // Repeater self-advert: one zero-hop advert shortly after boot (so neighbours
   // learn the relay) then periodically per the module's configured interval.
   if (g_repeater && g_radio_ok) {
@@ -634,6 +645,7 @@ void loop() {
       last_advert_ms = now;
     }
   }
+#endif
   // Power: when there's nothing left to make progress on this pass, hand the
   // core to the SoftDevice until the next interrupt (radio DIO, BLE, GPS UART,
   // FreeRTOS tick). This is a light idle — the BLE link and radio receiver stay
