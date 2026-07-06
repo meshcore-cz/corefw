@@ -24,14 +24,16 @@ but **wire-compatible with MeshCore Core Protocol V1** — corefw nodes
 interoperate on the same mesh as existing MeshCore firmware. The tooling
 (`corefw`) is **Go**.
 
-> Status: MVP. Two official boards (Heltec V3, Wio Tracker L1), repeater +
-> companion modules, one power policy, local + git external components,
-> reproducible lockfiles. The **Wio Tracker L1 companion** is functionally
+> Status: MVP. Three official boards (Heltec V3, Wio Tracker L1, SenseCAP Solar
+> Node P1), repeater + companion modules, one power policy, local + git external
+> components, reproducible lockfiles. The **companion** stack is functionally
 > complete on the portable layer: all 65 Companion-Protocol commands, encrypted
 > direct/group messaging (send **and** receive), contacts & channels, and
 > MeshCore-compatible flash storage — see
 > [Flashing over MeshCore](#flashing-over-meshcore) and
-> [docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md). Not yet run on real hardware.
+> [docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md). The **Heltec V3 companion** has
+> been flashed and runs on real hardware; the Wio Tracker L1 and SenseCAP Solar
+> targets build and link but are not yet hardware-verified.
 
 ---
 
@@ -53,29 +55,38 @@ $ ./corefw flash  profiles/heltec-v3-repeater.yaml --port /dev/ttyUSB0
 If PlatformIO isn't installed, `build` still generates the project and prints the
 manual `pio run` command instead of failing.
 
-A profile is small and readable:
+A profile is small and readable. Boards ship sensible defaults (radio region/RF
+parameters and a power policy), and every option has a schema default, so a
+complete build is often just a board and a module:
+
+```yaml
+name: heltec-v3-companion-ble
+platform: corefw@0.1
+board: heltec-v3
+
+modules:
+  - type: companion
+    transport: ble
+```
+
+Anything you *do* specify overrides the board defaults — add a `radio:` block to
+change region/frequency, a `policies:` block to tune power, or module options to
+depart from the schema defaults:
 
 ```yaml
 name: heltec-v3-repeater
+platform: corefw@0.1
 board: heltec-v3
 
 modules:
   - type: repeater
     advert_name: "CoreFW Repeater CZ"
-    max_neighbours: 80
+    admin_password: "changeme"
   - type: companion
     transport: usb
 
-policies:
-  power:
-    type: simple-power
-    low_battery: 30
-    critical_battery: 15
-    tx_power: 22
-
 radio:
-  region: eu868
-  freq: 869.525
+  region: us915       # override the board's eu868 default
 ```
 
 ## Commands
@@ -107,7 +118,7 @@ internal/             the Go tooling
   lock/               corefw.lock reproducibility record
   build/              pipeline orchestration
 components/           built-in ("official") components (embedded in the binary)
-  boards/             heltec-v3, wio-tracker-l1
+  boards/             heltec-v3, wio-tracker-l1, sensecap-solar
   modules/            repeater, companion
   policies/           simple-power
 firmware/             the C++ kernel & component implementations
@@ -118,16 +129,20 @@ firmware/             the C++ kernel & component implementations
     companion/        Companion Protocol: frame codec, all 65 CMD codes + RESP/PUSH,
                       command handler, contacts/channels/offline stores, RX decrypt
                       (Receiver), byte-compatible flash storage (StorageCodec/Storage)
-    ui/               CompanionUI (OLED screen model) + RTTTL buzzer/melody sequencer
-    include/corefw/   the public Board/Module/Policy/Mesh/Radio/Kernel API
+    ui/               CompanionUI (OLED screen model), NullDisplay, RTTTL buzzer/melody
+    include/corefw/   the public Board/Module/Policy/Mesh/Radio/Kernel API + board classes
   drivers/
     crypto/ed25519/   vendored orlp/ed25519 (same lib as MeshCore) — see its LICENSE
     crypto/sha256/    packet-hash + HMAC digest (matches Core Protocol packet hash)
     crypto/aes/       AES-128 block cipher (message-payload encryption, FIPS-197)
     radio/sx1262/     SX1262 RadioDriver (target-only, RadioLib)
     display/sh1106/   SH1106 OLED driver (target-only, Adafruit)
+    display/ssd1306/  SSD1306 OLED driver (target-only, Adafruit)
     buzzer/           Arduino tone() buzzer output (target-only)
-  boards/wio_tracker_l1/  BLE transport + InternalFS store + companion entrypoint (target-only)
+  platform/           per-architecture target wiring (target-only), one main per family
+    nrf52/            NRF52 BLE/USB transports, InternalFS/QSPI store, GPS, diagnostics
+                      + the shared nRF52 setup()/loop() (Wio, SenseCAP, …)
+    esp32/            ESP32 BLE/USB transports, LittleFS/SPIFFS store + shared ESP32 main
 profiles/             example build profiles
 examples/             an example external component
 docs/                 architecture & how-to guides
