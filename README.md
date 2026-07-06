@@ -41,19 +41,22 @@ interoperate on the same mesh as existing MeshCore firmware. The tooling
 
 ```console
 $ make build                 # build the corefw CLI
-$ ./corefw components         # list built-in boards / modules / policies
-$ ./corefw validate profiles/heltec-v3-repeater.yaml
+$ ./corefw component list     # list built-in boards / modules / policies
+$ ./corefw validate heltec-v3-repeater
 
 # build compiles the firmware with PlatformIO by default:
-$ ./corefw build  profiles/heltec-v3-repeater.yaml
-$ ./corefw build  profiles/heltec-v3-repeater.yaml --no-compile   # just generate
+$ ./corefw build heltec-v3-repeater
+$ ./corefw build heltec-v3-repeater --no-compile   # just generate
 
 # flash builds and uploads to a connected device:
-$ ./corefw flash  profiles/heltec-v3-repeater.yaml --port /dev/ttyUSB0
+$ ./corefw flash heltec-v3-repeater --port /dev/ttyUSB0
 ```
 
 If PlatformIO isn't installed, `build` still generates the project and prints the
 manual `pio run` command instead of failing.
+
+Profile arguments can be explicit paths (`profiles/heltec-v3-repeater.yaml`) or
+built-in profile names (`heltec-v3-repeater`).
 
 A profile is small and readable. Boards ship sensible defaults (radio region/RF
 parameters and a power policy), and every option has a schema default, so a
@@ -97,11 +100,20 @@ workflow examples, JSON output options and shell completion setup.
 | Command | Purpose |
 | --- | --- |
 | `corefw build <profile>` | Resolve, generate and compile a firmware image (`--no-compile` to skip) |
-| `corefw flash <profile>` | Build and upload to a connected device (`--port` optional) |
-| `corefw validate <profile>` | Validate a profile + its component graph, no generation |
-| `corefw components` / `corefw boards` | List available components |
-| `corefw lock <profile>` | Print the resolved lockfile |
-| `corefw version` | Print the platform version |
+| `corefw flash <profile>` | Build and upload to a connected device (`--port`, `--monitor`) |
+| `corefw validate <profile>` | Validate a profile and component graph without generation |
+| `corefw plan <profile>` | Show the resolved composition before generating firmware |
+| `corefw doctor [profile]` | Check the local environment and optional profile/toolchain |
+| `corefw devices` | List serial devices via PlatformIO |
+| `corefw monitor [profile]` | Open a PlatformIO serial monitor |
+| `corefw clean <profile>` / `corefw clean --all` | Remove generated corefw output |
+| `corefw component list/show/validate` | Inspect and validate components |
+| `corefw lock show <profile>` | Print the resolved lockfile JSON |
+| `corefw completion <shell>` | Generate shell completion scripts |
+| `corefw version` / `corefw --version` | Print the platform version |
+
+Legacy `corefw components`, `corefw boards` and `corefw lock <profile>` still
+work for compatibility, but the structured commands above are preferred.
 
 ## Repository layout
 
