@@ -507,7 +507,19 @@ class CommandHandler {
       ContactInfo c;
       updateContactFromFrame(c, last_mod, cmd, int(len));
       c.lastmod = last_mod; c.sync_since = 0;
-      if (s_.addContact(c)) { h_.saveContacts(); ok(out); } else err(ERR_TABLE_FULL, out);
+      uint8_t evicted[proto::PUB_KEY_SIZE];
+      bool did_evict = false;
+      if (s_.addContact(c, evicted, &did_evict)) {
+        // Tell the app which contact was overwritten so its list stays in sync.
+        if (did_evict) {
+          uint8_t d[1 + proto::PUB_KEY_SIZE];
+          d[0] = PUSH_CODE_CONTACT_DELETED;
+          std::memcpy(&d[1], evicted, proto::PUB_KEY_SIZE);
+          out.writeFrame(d, sizeof(d));
+        }
+        h_.saveContacts();
+        ok(out);
+      } else err(ERR_TABLE_FULL, out);
     }
   }
   void removeContactCmd(const uint8_t* cmd, size_t len, FrameWriter& out) {
@@ -603,6 +615,8 @@ class CommandHandler {
     uint32_t est_timeout = 0;
     int outcome = tx_.sendToContact(pkt, *c, est_timeout);
     if (outcome == SEND_FAILED) { err(ERR_TABLE_FULL, out); return; }
+    // Remember the expected ACK so an incoming PAYLOAD_ACK confirms delivery.
+    if (expected_ack != 0) s_.recordExpectedAck(expected_ack, h_.rtcNow());
     sent(outcome, expected_ack, est_timeout, out);
   }
 
@@ -715,6 +729,7 @@ class CommandHandler {
     int outcome = tx_.sendToContact(pkt, *c, est_timeout);
     if (outcome == SEND_FAILED) { err(ERR_TABLE_FULL, out); return; }
     uint32_t login_tag = proto::getU32LE(c->id.pub_key, 0);  // legacy matching scheme
+    s_.pending_login = login_tag;  // match the repeater's PAYLOAD_RESPONSE reply
     sent(outcome, login_tag, est_timeout, out);
   }
 
@@ -751,6 +766,7 @@ class CommandHandler {
     if (!c) { err(ERR_NOT_FOUND, out); return; }
     uint32_t tag = 0;
     sendReqType(*c, REQ_TYPE_GET_STATUS, tag, out);
+    s_.pending_status = proto::getU32LE(c->id.pub_key, 0);  // match reply by pub-key prefix
   }
   void sendTelemetryReq(const uint8_t* cmd, size_t len, FrameWriter& out) {
     if (len < 4 + proto::PUB_KEY_SIZE) { err(ERR_ILLEGAL_ARG, out); return; }
@@ -758,6 +774,7 @@ class CommandHandler {
     if (!c) { err(ERR_NOT_FOUND, out); return; }
     uint32_t tag = 0;
     sendReqType(*c, REQ_TYPE_GET_TELEMETRY_DATA, tag, out);
+    s_.pending_telemetry = tag;  // match reply by request tag
   }
   void sendBinaryReq(const uint8_t* cmd, size_t len, FrameWriter& out) {
     if (len < 2 + proto::PUB_KEY_SIZE) { err(ERR_ILLEGAL_ARG, out); return; }
@@ -765,6 +782,7 @@ class CommandHandler {
     if (!c) { err(ERR_NOT_FOUND, out); return; }
     uint32_t tag = 0;
     sendReqDatagram(*c, &cmd[1 + proto::PUB_KEY_SIZE], len - (1 + proto::PUB_KEY_SIZE), tag, out);
+    s_.pending_req = tag;  // match reply by request tag
   }
   void sendPathDiscovery(const uint8_t* cmd, size_t len, FrameWriter& out) {
     if (len < 2 + proto::PUB_KEY_SIZE || cmd[1] != 0) { err(ERR_ILLEGAL_ARG, out); return; }

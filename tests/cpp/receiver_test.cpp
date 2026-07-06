@@ -37,6 +37,24 @@ struct RecordingSink : MessageReceiver::Sink {
   void onAdvert(const ContactInfo&, bool is_new, uint8_t, const uint8_t*, uint32_t) override {
     adverts++; last_advert_new = is_new;
   }
+
+  int acks = 0; uint32_t last_ack = 0;
+  int path_updates = 0;
+  int controls = 0; std::string last_control;
+  bool need_ack = false; uint32_t need_ack_crc = 0; bool need_ack_flood = false;
+
+  int responses = 0; uint32_t last_resp_tag = 0;
+  void onResponse(const ContactInfo&, const uint8_t* d, size_t len) override {
+    responses++; if (len >= 4) last_resp_tag = proto::getU32LE(d, 0);
+  }
+  void onAck(uint32_t crc) override { acks++; last_ack = crc; }
+  void onPathUpdated(const ContactInfo&) override { path_updates++; }
+  void onControl(const uint8_t* d, size_t len, uint8_t, int8_t) override {
+    controls++; last_control.assign(reinterpret_cast<const char*>(d), len);
+  }
+  void needAck(const ContactInfo&, const uint8_t* ack, uint8_t, bool via_flood) override {
+    need_ack = true; need_ack_flood = via_flood; need_ack_crc = proto::getU32LE(ack, 0);
+  }
 };
 
 static proto::LocalIdentity idOf(uint8_t b) {
@@ -126,10 +144,115 @@ static void testAdvertAutoAdd() {
   check(!rx.handle(bad), "forged advert dropped");
 }
 
+// Receiving a plain text produces an ACK whose CRC equals the sender's
+// expected_ack — the delivery-receipt round trip.
+static void testAckGeneration() {
+  proto::LocalIdentity alice = idOf(1), bob = idOf(2);
+  CompanionState bs; bs.self = bob;
+  ContactInfo a; std::memcpy(a.id.pub_key, alice.pub_key, 32);
+  std::strcpy(a.name, "Alice"); a.type = ADV_TYPE_CHAT; bs.addContact(a);
+  RecordingSink sink; MessageReceiver rx(bs, sink);
+
+  uint8_t secret[proto::PUB_KEY_SIZE]; alice.calcSharedSecret(secret, bob);
+  uint8_t temp[64]; uint32_t expected_ack;
+  size_t plen = proto::composeTextPlaintext(temp, 0x11223344, 0, "ping", alice, expected_ack);
+  proto::Packet pkt;
+  proto::buildDatagram(pkt, proto::PAYLOAD_TXT_MSG, bob, alice, secret, temp, plen);
+  pkt.setRouteAndType(proto::ROUTE_FLOOD, proto::PAYLOAD_TXT_MSG);
+
+  check(rx.handle(pkt), "bob consumes msg");
+  check(sink.need_ack, "bob must acknowledge the plain msg");
+  check(sink.need_ack_crc == expected_ack, "generated ACK == sender's expected_ack");
+  check(sink.need_ack_flood, "flood message acknowledged via flood");
+}
+
+// A received PAYLOAD_ACK surfaces its CRC to the app (delivery confirmation).
+static void testAckReception() {
+  CompanionState bs; bs.self = idOf(5);
+  RecordingSink sink; MessageReceiver rx(bs, sink);
+  proto::Packet pkt;
+  pkt.setRouteAndType(proto::ROUTE_DIRECT, proto::PAYLOAD_ACK);
+  pkt.setPathHashSizeAndCount(1, 0);
+  proto::putU32LE(pkt.payload, 0, 0xDEADBEEF);
+  pkt.payload_len = 4;
+  check(rx.handle(pkt), "consumes ACK");
+  check(sink.acks == 1 && sink.last_ack == 0xDEADBEEF, "ACK crc surfaced");
+}
+
+// A CONTROL packet (high bit set on byte 0) is surfaced raw.
+static void testControlReception() {
+  CompanionState bs; bs.self = idOf(6);
+  RecordingSink sink; MessageReceiver rx(bs, sink);
+  proto::Packet pkt;
+  pkt.setRouteAndType(proto::ROUTE_DIRECT, proto::PAYLOAD_CONTROL);
+  pkt.setPathHashSizeAndCount(1, 0);
+  pkt.payload[0] = 0x80;
+  std::memcpy(&pkt.payload[1], "ctl", 3);
+  pkt.payload_len = 4;
+  check(rx.handle(pkt), "consumes control");
+  check(sink.controls == 1 && sink.last_control.size() == 4, "control surfaced");
+}
+
+// A PAYLOAD_PATH updates the contact's out_path and surfaces any embedded ACK.
+static void testPathReception() {
+  proto::LocalIdentity alice = idOf(1), bob = idOf(2);
+  CompanionState bs; bs.self = bob;
+  ContactInfo a; std::memcpy(a.id.pub_key, alice.pub_key, 32);
+  std::strcpy(a.name, "Alice"); a.type = ADV_TYPE_CHAT; a.out_path_len = OUT_PATH_UNKNOWN;
+  bs.addContact(a);
+  RecordingSink sink; MessageReceiver rx(bs, sink);
+
+  uint8_t secret[proto::PUB_KEY_SIZE]; alice.calcSharedSecret(secret, bob);
+  uint8_t temp[64]; size_t k = 0;
+  temp[k++] = 2;                        // path_len: 2 one-byte hops
+  temp[k++] = 0xAA; temp[k++] = 0xBB;   // the hop hashes
+  temp[k++] = proto::PAYLOAD_ACK;       // extra_type
+  proto::putU32LE(temp, k, 0xCAFEF00D); k += 4;  // embedded ACK
+  // The PATH wire format matches a text datagram (dest‖src‖MAC‖cipher); build the
+  // encrypted datagram then relabel the header as PAYLOAD_PATH (corefw only
+  // receives path returns, so buildDatagram doesn't emit the type itself).
+  proto::Packet pkt;
+  proto::buildDatagram(pkt, proto::PAYLOAD_TXT_MSG, bob, alice, secret, temp, k);
+  pkt.setRouteAndType(proto::ROUTE_FLOOD, proto::PAYLOAD_PATH);
+
+  check(rx.handle(pkt), "bob consumes path");
+  check(sink.path_updates == 1, "path update surfaced");
+  ContactInfo* ac = bs.lookupContact(alice.pub_key, 32);
+  check(ac && ac->out_path_len == 2, "out_path_len updated");
+  check(ac && ac->out_path[0] == 0xAA && ac->out_path[1] == 0xBB, "out_path bytes stored");
+  check(sink.acks == 1 && sink.last_ack == 0xCAFEF00D, "embedded ACK surfaced");
+}
+
+// A PAYLOAD_RESPONSE (e.g. a repeater login reply) decrypts and surfaces to the
+// app so login/status requests can complete.
+static void testResponseReception() {
+  proto::LocalIdentity repeater = idOf(7), me = idOf(2);
+  CompanionState bs; bs.self = me;
+  ContactInfo r; std::memcpy(r.id.pub_key, repeater.pub_key, 32);
+  std::strcpy(r.name, "Rep"); r.type = ADV_TYPE_CHAT; bs.addContact(r);
+  RecordingSink sink; MessageReceiver rx(bs, sink);
+
+  uint8_t secret[proto::PUB_KEY_SIZE]; repeater.calcSharedSecret(secret, me);
+  uint8_t temp[16];
+  proto::putU32LE(temp, 0, 0x00000099);  // tag / server timestamp
+  temp[4] = 0; temp[5] = 1; temp[6] = 1;  // RESP_SERVER_LOGIN_OK, keepalive, admin
+  proto::Packet pkt;
+  proto::buildDatagram(pkt, proto::PAYLOAD_TXT_MSG, me, repeater, secret, temp, 7);
+  pkt.setRouteAndType(proto::ROUTE_DIRECT, proto::PAYLOAD_RESPONSE);
+  check(rx.handle(pkt), "consumes response");
+  check(sink.responses == 1, "response surfaced");
+  check(sink.last_resp_tag == 0x99, "response tag decoded");
+}
+
 int main() {
   testDirectMessageInterop();
   testChannelInterop();
   testAdvertAutoAdd();
+  testAckGeneration();
+  testAckReception();
+  testControlReception();
+  testPathReception();
+  testResponseReception();
   if (g_fail) return 1;
   std::printf("all receiver (RX decrypt) tests passed\n");
   return 0;

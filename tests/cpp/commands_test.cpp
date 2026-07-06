@@ -405,8 +405,53 @@ static void testUnknown() {
   check(out.last()[0] == RESP_CODE_ERR && out.last()[1] == ERR_UNSUPPORTED_CMD, "unknown cmd err");
 }
 
+// A full contact table overwrites the oldest non-favourite when
+// AUTOADD_OVERWRITE_OLDEST is set, never evicts favourites, and reports which
+// contact it evicted (MeshCore allocateContactSlot semantics).
+static void testOverwriteOldest() {
+  CompanionState s;
+  for (int i = 0; i < kMaxContacts; i++) {
+    ContactInfo c;
+    c.id.pub_key[0] = uint8_t(i);
+    c.id.pub_key[1] = uint8_t(i >> 8);
+    c.type = ADV_TYPE_CHAT;
+    c.flags = 0;
+    c.lastmod = uint32_t(1000 + i);  // slot 0 is the oldest
+    check(s.addContact(c), "fill contact table to capacity");
+  }
+  check(s.num_contacts == kMaxContacts, "contact table full");
+
+  ContactInfo extra;
+  extra.id.pub_key[0] = 0xAB;
+  extra.lastmod = 9999;
+  check(!s.addContact(extra), "full table rejects add when overwrite off");
+
+  s.autoadd_config |= AUTOADD_OVERWRITE_OLDEST;
+  uint8_t evicted[proto::PUB_KEY_SIZE];
+  bool did = false;
+  check(s.addContact(extra, evicted, &did), "overwrite-oldest admits the add");
+  check(did && evicted[0] == 0 && evicted[1] == 0, "evicts the oldest (slot 0)");
+  check(s.num_contacts == kMaxContacts, "count unchanged after overwrite");
+  check(s.lookupContact(extra.id.pub_key, proto::PUB_KEY_SIZE) != nullptr, "new contact present");
+
+  // allow_evict=false (the advert path) must never delete a contact, even with
+  // overwrite-oldest enabled — guards the "adverts erase my contacts" regression.
+  ContactInfo advert;
+  advert.id.pub_key[0] = 0xEE;
+  advert.lastmod = 5;
+  check(!s.addContact(advert, nullptr, nullptr, /*allow_evict=*/false),
+        "advert add never evicts on a full table");
+
+  for (int i = 0; i < s.num_contacts; i++) s.contacts[i].flags |= CONTACT_FLAG_FAVOURITE;
+  ContactInfo extra2;
+  extra2.id.pub_key[0] = 0xCD;
+  extra2.lastmod = 1;
+  check(!s.addContact(extra2), "all-favourite table rejects overwrite");
+}
+
 int main() {
   testDeviceQuery();
+  testOverwriteOldest();
   testSelfInfo();
   testDeviceTime();
   testSetNameAndTxPower();

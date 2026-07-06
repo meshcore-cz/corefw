@@ -11,7 +11,7 @@ board: heltec-v3
 modules:
   - type: companion
     transport: usb
-    max_contacts: 100
+    max_contacts: 350   # match MeshCore's companion so a full contact set carries over
     max_group_channels: 40
 
 policies:

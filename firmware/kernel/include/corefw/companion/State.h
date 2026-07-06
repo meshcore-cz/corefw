@@ -47,6 +47,13 @@ inline constexpr uint8_t ADV_TYPE_SENSOR = 4;
 inline constexpr uint8_t ADVERT_LOC_NONE = 0;
 inline constexpr uint8_t ADVERT_LOC_SHARE = 1;
 
+// autoadd_config bit 0: when the contact table is full, overwrite the oldest
+// non-favourite contact instead of rejecting the add (MeshCore
+// AUTO_ADD_OVERWRITE_OLDEST). ContactInfo.flags bit 0 marks a favourite, which
+// is never evicted.
+inline constexpr uint8_t AUTOADD_OVERWRITE_OLDEST = 0x01;
+inline constexpr uint8_t CONTACT_FLAG_FAVOURITE = 0x01;
+
 // Request types for CMD_SEND_*_REQ.
 inline constexpr uint8_t REQ_TYPE_GET_STATUS = 0x01;
 inline constexpr uint8_t REQ_TYPE_GET_TELEMETRY_DATA = 0x03;
@@ -124,9 +131,37 @@ struct CompanionState {
     }
     return nullptr;
   }
-  bool addContact(const ContactInfo& c) {
-    if (num_contacts >= kMaxContacts) return false;
-    contacts[num_contacts++] = c;
+  // Adds (or, when full, overwrites) a contact. On a full table with
+  // AUTOADD_OVERWRITE_OLDEST set AND allow_evict, evicts the oldest non-favourite
+  // contact (matches MeshCore's allocateContactSlot); if `evicted_pub` is non-null
+  // and an eviction happens, it receives that contact's 32-byte pub_key and
+  // *evicted is set. Returns false when full and nothing may be evicted.
+  //
+  // allow_evict guards the *destructive* path: only an explicit user add
+  // (CMD_ADD_UPDATE_CONTACT) may overwrite. Incoming adverts pass false so a busy
+  // mesh can never silently delete the user's curated contacts — a full table
+  // just stops auto-adding new discoveries.
+  bool addContact(const ContactInfo& c, uint8_t* evicted_pub = nullptr, bool* evicted = nullptr,
+                  bool allow_evict = true) {
+    if (evicted) *evicted = false;
+    if (num_contacts < kMaxContacts) {
+      contacts[num_contacts++] = c;
+      return true;
+    }
+    if (!allow_evict || !(autoadd_config & AUTOADD_OVERWRITE_OLDEST)) return false;
+    int oldest = -1;
+    uint32_t oldest_lastmod = 0xFFFFFFFFu;
+    for (int i = 0; i < num_contacts; i++) {
+      if ((contacts[i].flags & CONTACT_FLAG_FAVOURITE) != 0) continue;  // keep favourites
+      if (contacts[i].lastmod < oldest_lastmod) {
+        oldest_lastmod = contacts[i].lastmod;
+        oldest = i;
+      }
+    }
+    if (oldest < 0) return false;  // table is all favourites
+    if (evicted_pub) std::memcpy(evicted_pub, contacts[oldest].id.pub_key, proto::PUB_KEY_SIZE);
+    if (evicted) *evicted = true;
+    contacts[oldest] = c;
     return true;
   }
   bool removeContact(const ContactInfo& c) {
@@ -171,6 +206,45 @@ struct CompanionState {
     for (int i = 0; i < offline_queue_len; i++) offline_queue[i] = offline_queue[i + 1];
     return len;
   }
+
+  // --- Expected-ACK table -------------------------------------------------
+  // A circular table of ACK CRCs for messages we've sent, so an incoming
+  // PAYLOAD_ACK can be matched to confirm delivery (MeshCore expected_ack_table).
+  static constexpr int kExpectedAcks = 16;
+  struct PendingAck {
+    uint32_t crc = 0;
+    uint32_t sent_s = 0;  // rtc seconds at send, for the app's trip-time estimate
+    bool used = false;
+  };
+  PendingAck expected_acks[kExpectedAcks];
+  int expected_ack_next = 0;
+
+  // Pending request matching for inbound PAYLOAD_RESPONSE packets. Login/status
+  // match on the sender's pub_key prefix (legacy scheme); telemetry/binary match
+  // on the request tag. 0 = nothing pending. Mirrors MeshCore's pending_* fields.
+  uint32_t pending_login = 0;
+  uint32_t pending_status = 0;
+  uint32_t pending_telemetry = 0;
+  uint32_t pending_req = 0;
+
+  void recordExpectedAck(uint32_t crc, uint32_t now_s) {
+    PendingAck& e = expected_acks[expected_ack_next];
+    e.crc = crc;
+    e.sent_s = now_s;
+    e.used = true;
+    expected_ack_next = (expected_ack_next + 1) % kExpectedAcks;
+  }
+  // Returns true and the send time if `crc` matches a pending ack; clears it.
+  bool matchExpectedAck(uint32_t crc, uint32_t& sent_s_out) {
+    for (int i = 0; i < kExpectedAcks; i++) {
+      if (expected_acks[i].used && expected_acks[i].crc == crc) {
+        sent_s_out = expected_acks[i].sent_s;
+        expected_acks[i].used = false;
+        return true;
+      }
+    }
+    return false;
+  }
 };
 
 // SendOutcome mirrors the reference MSG_SEND_* return codes.
@@ -201,6 +275,12 @@ class MeshSender {
 
   // Build and send this node's self advert. flood=false means zero-hop.
   virtual bool sendSelfAdvert(bool flood) = 0;
+
+  // Send a PAYLOAD_ACK (`ack`, ack_len bytes) to `to`: direct along its out_path
+  // when known, otherwise flood. Acknowledges a received text message.
+  virtual bool sendAck(const uint8_t* ack, uint8_t ack_len, const ContactInfo& to) {
+    (void)ack; (void)ack_len; (void)to; return false;
+  }
 
   // Serialize this node's self advert packet to `out` (CMD_EXPORT_CONTACT self).
   // Returns the byte length, or 0 on failure.

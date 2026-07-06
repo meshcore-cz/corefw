@@ -131,6 +131,22 @@ inline size_t composeTextPlaintext(uint8_t* temp, uint32_t timestamp, uint8_t at
   return len;
 }
 
+// ackHashFor computes the 4-byte ACK CRC a receiver returns to prove it got a
+// PLAIN text message: sha256(plaintext[0..core_len], sender_pub_key)[0..3], where
+// core_len = 5 + text length and plaintext is the decrypted timestamp‖flags‖text.
+// The sender keys this with its own pub_key (composeTextPlaintext.expected_ack);
+// the receiver keys it with the sending contact's pub_key — same bytes, so the
+// values match and the sender can confirm delivery. Mirrors MeshCore's ack_hash.
+inline uint32_t ackHashFor(const uint8_t* plaintext, size_t core_len, const uint8_t* sender_pub) {
+  uint8_t digest[32];
+  corefw_sha256_ctx c;
+  corefw_sha256_init(&c);
+  corefw_sha256_update(&c, plaintext, core_len);
+  corefw_sha256_update(&c, sender_pub, PUB_KEY_SIZE);
+  corefw_sha256_final(&c, digest);
+  return getU32LE(digest, 0);
+}
+
 // composeCliDataPlaintext: timestamp(4) || ((attempt&3)|(TXT_TYPE_CLI_DATA<<2))
 // || text. No expected ACK. Returns length (5 + strlen(text)).
 inline size_t composeCliDataPlaintext(uint8_t* temp, uint32_t timestamp, uint8_t attempt,

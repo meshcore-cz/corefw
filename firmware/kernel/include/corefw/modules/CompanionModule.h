@@ -217,6 +217,115 @@ class CompanionModule : public Module,
     if (on > 0) scheduleIo(out, on);
   }
 
+  // A PAYLOAD_ACK (direct or embedded in a path return) for a message we sent:
+  // confirm delivery to the app with the round-trip time (PUSH_CODE_SEND_CONFIRMED).
+  void onAck(uint32_t crc) override {
+    uint32_t sent_s = 0;
+    if (!state_.matchExpectedAck(crc, sent_s)) return;  // not one we're waiting on
+    if (!shouldPushToApp()) return;
+    uint8_t f[9];
+    f[0] = companion::PUSH_CODE_SEND_CONFIRMED;
+    proto::putU32LE(f, 1, crc);
+    uint32_t trip_ms = host_ ? (host_->rtcNow() - sent_s) * 1000u : 0;
+    proto::putU32LE(f, 5, trip_ms);
+    pushFrame(f, sizeof(f));
+  }
+
+  // A contact's return path was learned/updated: persist it and tell the app so
+  // future sends to it go direct (PUSH_CODE_PATH_UPDATED).
+  void onPathUpdated(const companion::ContactInfo& contact) override {
+    dirty_ = true;
+    if (!shouldPushToApp()) return;
+    uint8_t f[1 + proto::PUB_KEY_SIZE];
+    f[0] = companion::PUSH_CODE_PATH_UPDATED;
+    std::memcpy(&f[1], contact.id.pub_key, proto::PUB_KEY_SIZE);
+    pushFrame(f, sizeof(f));
+  }
+
+  // A raw control payload (MeshCore onControlDataRecv → PUSH_CODE_CONTROL_DATA).
+  void onControl(const uint8_t* data, size_t len, uint8_t path_len, int8_t snr_q4) override {
+    if (!shouldPushToApp()) return;
+    if (len + 4 > companion::MAX_FRAME_SIZE) return;
+    uint8_t f[companion::MAX_FRAME_SIZE];
+    size_t i = 0;
+    f[i++] = companion::PUSH_CODE_CONTROL_DATA;
+    f[i++] = uint8_t(snr_q4);
+    f[i++] = 0;  // rssi (not tracked per-packet here)
+    f[i++] = path_len;
+    std::memcpy(&f[i], data, len);
+    i += len;
+    pushFrame(f, i);
+  }
+
+  // We decrypted a plain text and must acknowledge the sender; the board sender
+  // routes the ACK direct (via the contact's out_path) or by flood.
+  void needAck(const companion::ContactInfo& to, const uint8_t* ack, uint8_t ack_len,
+               bool via_flood) override {
+    (void)via_flood;  // the board sender picks direct vs flood from to.out_path_len
+    if (sender_ != nullptr) sender_->sendAck(ack, ack_len, to);
+  }
+
+  // A decrypted PAYLOAD_RESPONSE: match it to a pending login / status /
+  // telemetry / binary request and push the result (MeshCore onContactResponse).
+  void onResponse(const companion::ContactInfo& from, const uint8_t* data, size_t len) override {
+    if (len < 4 || !shouldPushToApp()) return;
+    const uint32_t tag = proto::getU32LE(data, 0);
+    const uint32_t key4 = proto::getU32LE(from.id.pub_key, 0);
+
+    // Login reply (matched on the repeater's pub-key prefix, legacy scheme).
+    if (state_.pending_login != 0 && state_.pending_login == key4) {
+      state_.pending_login = 0;
+      uint8_t f[companion::MAX_FRAME_SIZE];
+      size_t i = 0;
+      bool ok_legacy = (len >= 6 && data[4] == 'O' && data[5] == 'K');
+      bool ok_new = (len >= 5 && data[4] == 0);  // RESP_SERVER_LOGIN_OK
+      if (ok_legacy) {
+        f[i++] = companion::PUSH_CODE_LOGIN_SUCCESS;
+        f[i++] = 0;  // is_admin (legacy)
+        std::memcpy(&f[i], from.id.pub_key, 6); i += 6;
+      } else if (ok_new) {
+        f[i++] = companion::PUSH_CODE_LOGIN_SUCCESS;
+        f[i++] = len > 6 ? data[6] : 0;  // permissions (is_admin)
+        std::memcpy(&f[i], from.id.pub_key, 6); i += 6;
+        proto::putU32LE(f, i, tag); i += 4;   // server timestamp
+        f[i++] = len > 7 ? data[7] : 0;   // ACL permissions
+        f[i++] = len > 12 ? data[12] : 0;  // firmware version level
+      } else {
+        f[i++] = companion::PUSH_CODE_LOGIN_FAIL;
+        f[i++] = 0;  // reserved
+        std::memcpy(&f[i], from.id.pub_key, 6); i += 6;
+      }
+      pushFrame(f, i);
+      return;
+    }
+    if (len <= 4) return;
+    // Status reply (matched on pub-key prefix).
+    if (state_.pending_status != 0 && state_.pending_status == key4) {
+      state_.pending_status = 0;
+      emitContactResponse(companion::PUSH_CODE_STATUS_RESPONSE, from, &data[4], len - 4);
+      return;
+    }
+    // Telemetry reply (matched on request tag).
+    if (state_.pending_telemetry != 0 && tag == state_.pending_telemetry) {
+      state_.pending_telemetry = 0;
+      emitContactResponse(companion::PUSH_CODE_TELEMETRY_RESPONSE, from, &data[4], len - 4);
+      return;
+    }
+    // Binary reply (matched on request tag): [code, tag(4), reply].
+    if (state_.pending_req != 0 && tag == state_.pending_req) {
+      state_.pending_req = 0;
+      uint8_t f[companion::MAX_FRAME_SIZE];
+      size_t i = 0;
+      f[i++] = companion::PUSH_CODE_BINARY_RESPONSE;
+      proto::putU32LE(f, i, tag); i += 4;
+      size_t dl = len - 4;
+      if (i + dl > companion::MAX_FRAME_SIZE) dl = companion::MAX_FRAME_SIZE - i;
+      std::memcpy(&f[i], &data[4], dl); i += dl;
+      pushFrame(f, i);
+      return;
+    }
+  }
+
   void onEvent(const Event& e) override {
     if (e.type == EventType::CompanionConnected) {
       connected_ = true;
@@ -332,6 +441,27 @@ class CompanionModule : public Module,
     slot->path_len = encoded_path_len;
     uint8_t bl = uint8_t((encoded_path_len & 63) * (((encoded_path_len >> 6) + 1)));
     std::memcpy(slot->path, path_bytes, bl);
+  }
+
+  // Push a [code, 0(reserved), pub_key_prefix(6), reply...] response frame
+  // (MeshCore status/telemetry response layout).
+  void emitContactResponse(uint8_t code, const companion::ContactInfo& from,
+                           const uint8_t* reply, size_t reply_len) {
+    uint8_t f[companion::MAX_FRAME_SIZE];
+    size_t i = 0;
+    f[i++] = code;
+    f[i++] = 0;  // reserved
+    std::memcpy(&f[i], from.id.pub_key, 6); i += 6;
+    if (i + reply_len > companion::MAX_FRAME_SIZE) reply_len = companion::MAX_FRAME_SIZE - i;
+    std::memcpy(&f[i], reply, reply_len); i += reply_len;
+    pushFrame(f, i);
+  }
+
+  // Frame a push payload and queue it on the non-blocking IO ring.
+  void pushFrame(const uint8_t* payload, size_t len) {
+    uint8_t out[companion::MAX_FRAME_SIZE + 3];
+    size_t on = companion::encodeFrame(out, payload, len);
+    if (on > 0) scheduleIo(out, on);
   }
 
   void scheduleIo(const uint8_t* framed, size_t len) {

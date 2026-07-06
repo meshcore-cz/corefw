@@ -270,6 +270,22 @@ class WioMeshSender : public companion::MeshSender {
     g_dispatcher->send(pkt);
     return true;
   }
+  bool sendAck(const uint8_t* ack, uint8_t ack_len, const companion::ContactInfo& to) override {
+    if (!g_dispatcher) return false;
+    proto::Packet pkt;
+    pkt.header = uint8_t(proto::PAYLOAD_ACK << proto::PH_TYPE_SHIFT);
+    std::memcpy(pkt.payload, ack, ack_len);
+    pkt.payload_len = ack_len;
+    if (to.out_path_len == companion::OUT_PATH_UNKNOWN) {
+      setRoute(pkt, proto::ROUTE_FLOOD);
+      pkt.setPathHashSizeAndCount(1, 0);
+    } else {
+      setRoute(pkt, proto::ROUTE_DIRECT);
+      applyPath(pkt, to.out_path, to.out_path_len);
+    }
+    g_dispatcher->send(pkt);
+    return true;
+  }
   uint32_t rtcNowUnique() override { return g_rtc.now() + (seq_++ & 0x3); }
   uint32_t random32() override { rng_ = rng_ * 1664525u + 1013904223u; return rng_; }
 

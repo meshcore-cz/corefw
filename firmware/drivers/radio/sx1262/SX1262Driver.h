@@ -84,7 +84,16 @@ class SX1262Driver : public RadioDriver {
   }
 
   bool transmit(const uint8_t* data, size_t len) override {
+    // Blink the TX LED for the duration of the transmit, matching MeshCore's
+    // onBeforeTransmit/onAfterTransmit — so the board LED flickers on each packet
+    // this node sends or forwards (adverts, messages, traces, flood forwards).
+#ifdef P_LORA_TX_LED
+    digitalWrite(P_LORA_TX_LED, HIGH);
+#endif
     bool ok = radio_.transmit(const_cast<uint8_t*>(data), len) == RADIOLIB_ERR_NONE;
+#ifdef P_LORA_TX_LED
+    digitalWrite(P_LORA_TX_LED, LOW);
+#endif
     irq_ready_ = false;  // TX done shares the same DIO1 action
     startReceive();
     return ok;
