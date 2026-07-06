@@ -25,6 +25,7 @@
 
 #include "NRF52BLETransport.h"
 #include "NRF52FileStore.h"
+#include "NRF52USBSerialTransport.h"
 // These live outside the kernel include root; the generated build adds -I firmware.
 #include <drivers/buzzer/ArduinoBuzzer.h>
 #include <drivers/display/sh1106/SH1106Display.h>
@@ -63,6 +64,7 @@ class SoftRTC {
 static ArduinoClock g_clock;
 static SoftRTC g_rtc;
 static board::NRF52BLETransport g_ble;
+static board::NRF52USBSerialTransport g_usb;
 static ui::SH1106Display g_display;
 static ui::ArduinoBuzzer g_buzzer(PIN_BUZZER);
 static Dispatcher* g_dispatcher = nullptr;
@@ -71,6 +73,7 @@ static proto::LocalIdentity g_identity;
 static board::NRF52FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+static companion::CompanionTransport* g_transport = nullptr;
 
 // CompanionHost implementation: device services (RTC, battery, persistence).
 // Persistence flows through the byte-compatible PersistentStore, so writes land
@@ -182,6 +185,40 @@ class WioMeshSender : public companion::MeshSender {
 
 static WioMeshSender g_sender;
 
+// Minimal Wio joystick handling for the MeshCore-style companion pages. The
+// button pins are active-low in the board variant.
+struct ButtonEdge {
+  uint8_t pin;
+  bool last = true;
+  uint32_t changed_at = 0;
+  bool began = false;
+
+  void begin() {
+    pinMode(pin, INPUT_PULLUP);
+    last = digitalRead(pin);
+    changed_at = millis();
+    began = true;
+  }
+
+  bool pressed() {
+    if (!began) begin();
+    bool now = digitalRead(pin);
+    uint32_t t = millis();
+    if (now != last && t - changed_at > 40) {
+      last = now;
+      changed_at = t;
+      return now == LOW;
+    }
+    return false;
+  }
+};
+
+#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
+static ButtonEdge g_btn_left{PIN_BUTTON4};
+static ButtonEdge g_btn_right{PIN_BUTTON5};
+static ButtonEdge g_btn_enter{PIN_BUTTON6};
+#endif
+
 // findCompanion locates the CompanionModule the generated composition
 // registered, so we can attach the board's transport/display/buzzer to it.
 static CompanionModule* findCompanion() {
@@ -192,16 +229,37 @@ static CompanionModule* findCompanion() {
   return nullptr;
 }
 
+static void showStage(const char* line1, const char* line2 = "") {
+  if (!g_display.isOn()) return;
+  g_display.startFrame();
+  g_display.setTextSize(1);
+  g_display.setColor(ui::Display::LIGHT);
+  g_display.setCursor(0, 0);
+  g_display.print(line1);
+  g_display.setCursor(0, 14);
+  g_display.print(line2);
+  g_display.endFrame();
+}
+
 void setup() {
   // 1. Bring up the board (buses, radio, power rails) via the composition root.
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
   g_companion = findCompanion();
 
+  // Bring up the display early so every potentially blocking startup stage has
+  // a visible breadcrumb on the OLED.
+  bool display_ok = g_display.begin();
+  if (display_ok) {
+    showStage("corefw display", "Wio Tracker L1");
+    delay(500);
+  }
+
   // 2. Mount the existing filesystem (never formats) and load identity, prefs,
   //    contacts and channels in MeshCore's on-flash formats. A device reflashed
   //    from MeshCore keeps its identity (mesh address) and data. Only a fresh
   //    device generates a new identity here (seeded from the hardware RNG).
+  showStage("startup", "storage");
   g_fs.begin();
   if (g_companion) {
     uint8_t seed[proto::SEED_SIZE];
@@ -211,6 +269,7 @@ void setup() {
   }
 
   // 3. Build the radio scheduler around the board's configured radio.
+  showStage("startup", "radio");
   RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
   RadioConfig cfg;
   cfg.tx_power_dbm = g_companion ? g_companion->state().tx_power_dbm : 22;
@@ -222,9 +281,17 @@ void setup() {
   if (g_companion) dispatcher.subscribe(g_companion);
 
   // 4. Peripherals for the companion experience.
-  g_display.begin();
+  showStage("startup", "buzzer");
   g_buzzer.begin();
-  g_ble.begin(/*name=*/"corefw-wio", BLE_PIN_CODE);
+  if (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) {
+    showStage("startup", "usb serial");
+    g_usb.begin(115200);
+    g_transport = &g_usb;
+  } else {
+    showStage("startup", "ble");
+    g_ble.begin(/*name=*/"corefw-wio", BLE_PIN_CODE);
+    g_transport = &g_ble;
+  }
 
   // 5. Attach everything to the companion module and start the kernel.
   if (g_companion) {
@@ -232,10 +299,16 @@ void setup() {
     comp->attachClock(&g_clock);
     comp->attachHost(&g_host);
     comp->attachSender(&g_sender);
-    comp->attachTransport(&g_ble);
+    comp->attachTransport(g_transport);
     comp->attachDisplay(&g_display);
     comp->attachBuzzer(&g_buzzer);
   }
+
+#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
+  g_btn_left.begin();
+  g_btn_right.begin();
+  g_btn_enter.begin();
+#endif
 
   static struct : PowerCoordinator {
     void requireRadioUntil(uint64_t) override {}
@@ -243,7 +316,9 @@ void setup() {
     void preventDeepSleep(const char*) override {}
     void releaseDeepSleep(const char*) override {}
   } power;
+  showStage("startup", "kernel");
   g_kernel.begin(dispatcher, power);
+  showStage("startup", "loop");
 }
 
 void loop() {
@@ -253,7 +328,12 @@ void loop() {
   // Reflect BLE connection state as kernel events, then pump the companion.
   static bool wasConnected = false;
   if (g_companion) {
-    bool nowConnected = g_ble.connected();
+#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
+    if (g_btn_left.pressed()) g_companion->ui().prevPage();
+    if (g_btn_right.pressed()) g_companion->ui().nextPage();
+    if (g_btn_enter.pressed()) g_companion->ui().clearMessagePreview();
+#endif
+    bool nowConnected = g_transport ? g_transport->connected() : false;
     if (nowConnected != wasConnected) {
       Event e;
       e.type = nowConnected ? EventType::CompanionConnected : EventType::CompanionDisconnected;

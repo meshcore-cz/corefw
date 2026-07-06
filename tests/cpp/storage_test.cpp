@@ -167,7 +167,7 @@ static void testPersistentStoreRoundTrip() {
   std::strcpy(s.node_name, "Wio");
   uint8_t seed[proto::SEED_SIZE]; std::memset(seed, 0x77, sizeof(seed));
   store.loadAll(s, seed);
-  check(fs.exists("/identity/_main.id"), "identity persisted on first boot");
+  check(fs.exists("/_main.id"), "identity persisted on first boot");
 
   // Populate and save.
   s.freq_khz = 868000; s.ble_pin = 654321; s.tx_power_dbm = 20;

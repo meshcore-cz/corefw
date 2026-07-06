@@ -1,0 +1,26 @@
+# A Wio Tracker L1 USB companion — matches MeshCore's companion_radio_usb role.
+#
+# Build it with:  corefw build profiles/wio-tracker-l1-companion-usb.yaml
+name: wio-tracker-l1-companion-usb
+platform: corefw@0.1
+
+board: wio-tracker-l1
+
+modules:
+  - type: companion
+    transport: usb
+    max_contacts: 350
+    max_group_channels: 40
+
+policies:
+  power:
+    type: simple-power
+    low_battery: 25
+    critical_battery: 10
+    tx_power: 20
+
+radio:
+  region: eu868
+  freq: 869.525
+  bandwidth: 250
+  spreading_factor: 11

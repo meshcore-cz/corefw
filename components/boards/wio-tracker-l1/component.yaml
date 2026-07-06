@@ -25,10 +25,12 @@ board:
     platform: nordicnrf52
     framework: arduino
     base_env: nrf52
-    ldscript: boards/nrf52840_s140_v7.ld
+    ldscript: boards/nrf52840_s140_v7_extrafs.ld
+    max_size: 708608
     support_files:
       - pio-board/seeed-wio-tracker-l1.json
       - pio-board/nrf52840_s140_v7.ld
+      - pio-board/nrf52840_s140_v7_extrafs.ld
     variant_files:
       - variant/variant.h
       - variant/variant.cpp
@@ -61,6 +63,8 @@ build:
     WRAPPER_CLASS: CustomSX1262Wrapper
     SX126X_CURRENT_LIMIT: "140"
     SX126X_RX_BOOSTED_GAIN: "1"
+    DISPLAY_ADDRESS: "0x3D"
+    QSPIFLASH: "1"
     PIN_OLED_RESET: "-1"
     GPS_BAUD_RATE: "9600"
     LORA_TX_POWER: "22"
@@ -69,6 +73,7 @@ build:
   lib_deps:
     - adafruit/Adafruit SH110X @ ^2.1.13
     - adafruit/Adafruit GFX Library @ ^1.12.1
+    - adafruit/Adafruit SPIFlash @ ^5.1.1
 
 codegen:
   class: WioTrackerL1Board

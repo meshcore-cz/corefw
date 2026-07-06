@@ -46,6 +46,7 @@ class Dispatcher : public MeshService {
   // Call frequently from the kernel loop. Processes at most one received frame
   // and at most one transmission per call (half-duplex radio).
   void loop() {
+    if (radio_ == nullptr) return;
     const uint32_t now = clock_->millis();
     pumpReceive(now);
     pumpTransmit(now);

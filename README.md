@@ -173,13 +173,14 @@ stored identity and preferences:
   MeshCore uses (same SoftDevice S140 7.3.0, same bootloader). A USB flash writes
   only the application region; the MBR, SoftDevice and bootloader are untouched.
 - **Data preserved.** corefw reads/writes the same on-flash files in the same
-  byte formats as MeshCore's `DataStore` (`/identity/_main.id`, `/new_prefs`,
-  `/contacts3`, `/channels2`). It mounts the existing filesystem and **never
-  formats** it, so the node keeps its identity (its mesh address) and settings.
-  Only an explicit factory-reset command erases anything.
+  byte formats as MeshCore's `DataStore` (`/_main.id`, `/new_prefs`,
+  `/contacts3`, `/channels2`). On Wio Tracker L1 companion builds, identity and
+  prefs stay on InternalFS while contacts/channels use the external QSPI flash,
+  matching MeshCore's `QSPIFLASH` layout. Only an explicit factory-reset command
+  erases anything.
 
-Full details, the flash memory map, and one caveat (contacts on the companion's
-QSPI layout) are in [docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md).
+Full details, the flash memory map, and the storage migration behavior are in
+[docs/FLASH-SAFETY.md](docs/FLASH-SAFETY.md).
 
 ## Design
 

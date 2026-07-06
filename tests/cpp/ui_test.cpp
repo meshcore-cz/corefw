@@ -38,9 +38,19 @@ class FakeDisplay : public Display {
     lines.clear();
     cleared = true;
   }
+  void startFrame(Color) override {
+    lines.clear();
+    cleared = true;
+  }
+  void endFrame() override { flushed = true; }
+  void setTextSize(int sz) override { text_size = sz; }
+  void setColor(Color c) override { color = c; }
   void setCursor(int, int) override {}
   void print(const char* s) override { lines.emplace_back(s); }
-  void hline(int) override {}
+  void printWordWrap(const char* s, int) override { print(s); }
+  void fillRect(int, int, int, int) override { shapes++; }
+  void drawRect(int, int, int, int) override { shapes++; }
+  void hline(int) override { shapes++; }
   void flush() override { flushed = true; }
   bool has(const char* substr) const {
     for (auto& l : lines)
@@ -48,6 +58,9 @@ class FakeDisplay : public Display {
     return false;
   }
   std::vector<std::string> lines;
+  int text_size = 1;
+  Color color = LIGHT;
+  int shapes = 0;
   bool cleared = false, flushed = false;
 };
 }  // namespace
@@ -95,28 +108,42 @@ static void testMelodySequencing() {
 static void testCompanionScreen() {
   FakeDisplay d;
   CompanionUI ui;
+  ui.begin(0);
+  ui.render(d, 0, 0);
+  check(d.cleared && d.flushed, "splash cleared and flushed");
+  check(d.has("meshcore"), "splash shows MeshCore logo text");
+
+  FakeDisplay home;
   ui.setNodeName("Wio Companion");
   ui.setConnected(true);
   ui.setBatteryMilliVolts(3700);
   ui.setUnread(2);
   ui.setLastMessage("hi there");
-  ui.render(d);
+  ui.render(home, 4000, 100);
 
-  check(d.cleared && d.flushed, "screen cleared and flushed");
-  check(d.has("Wio Companion"), "shows node name");
-  check(d.has("BLE:on"), "shows BLE connected");
-  check(d.has("3.70V"), "shows battery voltage");
-  check(d.has("Unread: 2"), "shows unread count");
-  check(d.has("hi there"), "shows last message");
+  check(home.cleared && home.flushed, "home screen cleared and flushed");
+  check(home.has("Wio Companion"), "shows node name");
+  check(home.has("MSG: 2"), "shows unread count");
+  check(home.has("< Connected >"), "shows BLE connected");
+  check(home.has("hi there"), "shows last message");
+  check(home.shapes > 0, "draws battery and page indicators");
+
+  FakeDisplay preview;
+  ui.addMessagePreview(0xFF, "Alice", "hello from the mesh", 105);
+  ui.render(preview, 4500, 110);
+  check(preview.has("Unread: 2"), "preview shows unread count");
+  check(preview.has("(D) Alice:"), "preview shows direct-message origin");
+  check(preview.has("hello from the mesh"), "preview shows message text");
 
   // Disconnected state.
   FakeDisplay d2;
   CompanionUI ui2;
+  ui2.begin(0);
   ui2.setConnected(false);
   ui2.setBatteryMilliVolts(4020);
-  ui2.render(d2);
-  check(d2.has("BLE:off"), "shows BLE disconnected");
-  check(d2.has("4.02V"), "battery voltage formatting");
+  ui2.setBlePin(123456);
+  ui2.render(d2, 4000, 0);
+  check(d2.has("Pin:123456"), "shows pairing pin when disconnected");
 }
 
 int main() {

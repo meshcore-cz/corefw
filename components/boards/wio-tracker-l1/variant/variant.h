@@ -60,6 +60,8 @@
 #define PIN_SPI_MISO            (9)
 #define PIN_SPI_MOSI            (10)
 #define PIN_SPI_SCK             (8)
+#define PIN_SPI_SS              (4)
+static const uint8_t SS = PIN_SPI_SS;
 
 // Lora Pins
 #define  P_LORA_SCLK            PIN_SPI_SCK

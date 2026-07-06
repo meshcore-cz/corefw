@@ -6,7 +6,7 @@
 // being reflashed with corefw (and vice-versa). The record layouts and file
 // names below are the compatibility contract:
 //
-//   /identity/_main.id : prv_key(64) || pub_key(32) [ || node_name(32) ]
+//   /_main.id          : prv_key(64) || pub_key(32) [ || node_name(32) ]
 //   /new_prefs         : 137-byte fixed record (see prefs field offsets)
 //   /contacts3         : 152 bytes per ContactInfo
 //   /channels2         : 68 bytes per channel
@@ -24,8 +24,7 @@
 namespace corefw::companion {
 
 // File names (must match DataStore.cpp exactly).
-inline constexpr const char* IDENTITY_DIR = "/identity";
-inline constexpr const char* IDENTITY_NAME = "_main";      // -> /identity/_main.id
+inline constexpr const char* IDENTITY_FILE = "/_main.id";
 inline constexpr const char* PREFS_FILE = "/new_prefs";
 inline constexpr const char* CONTACTS_FILE = "/contacts3";
 inline constexpr const char* CHANNELS_FILE = "/channels2";
@@ -159,7 +158,7 @@ inline void decodeChannel(const uint8_t in[CHANNEL_RECORD_SIZE], ChannelDetails&
   ch.channel.setSecret(key);
 }
 
-// encodeIdentity writes /identity/_main.id : prv || pub || name(32).
+// encodeIdentity writes /_main.id : prv || pub || name(32).
 inline void encodeIdentity(const proto::LocalIdentity& id, const char* name,
                            uint8_t out[IDENTITY_RECORD_SIZE]) {
   std::memcpy(out, id.prv_key, proto::PRV_KEY_SIZE);

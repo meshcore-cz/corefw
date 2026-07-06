@@ -64,6 +64,9 @@ class CompanionModule : public Module,
   void initialize(Context& ctx) override {
     ctx_ = &ctx;
     ui_.setNodeName(state_.node_name);
+    ui_.setBlePin(state_.ble_pin);
+    ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
+    ui_.begin(clock_ ? clock_->millis() : 0);
   }
 
   // tick pumps the transport, command handling, melody and screen. The target
@@ -131,6 +134,7 @@ class CompanionModule : public Module,
   // contact, or ADVERT (pubkey only) for a refresh, matching the reference.
   void onAdvert(const companion::ContactInfo& contact, bool is_new) override {
     if (is_new) dirty_ = true;
+    ui_.addRecentAdvert(contact.name, host_ ? host_->rtcNow() : 0);
     if (!connected_ || io_ == nullptr) return;
     uint8_t f[companion::MAX_FRAME_SIZE];
     size_t n;
@@ -150,6 +154,7 @@ class CompanionModule : public Module,
     if (e.type == EventType::CompanionConnected) {
       connected_ = true;
       ui_.setConnected(true);
+      ui_.setSerialEnabled(true);
       beep(ui::melodies::kStartup);
     } else if (e.type == EventType::CompanionDisconnected) {
       connected_ = false;
@@ -193,7 +198,7 @@ class CompanionModule : public Module,
     unread_++;
     ui_.setUnread(unread_);
     if (display) {
-      if (text) ui_.setLastMessage(text);
+      ui_.addMessagePreview(path_len, who, text, host_ ? host_->rtcNow() : 0);
       beep(ui::melodies::kMessage);
     }
     (void)who; (void)path_len;
@@ -207,10 +212,13 @@ class CompanionModule : public Module,
 
   void refreshUI(uint32_t now_ms) {
     if (display_ == nullptr) return;
-    if (now_ms - last_render_ < 250 && !dirty_) return;  // ~4 Hz refresh
+    if (now_ms < next_render_ && !dirty_ && !ui_.dirty()) return;
     if (host_ != nullptr) ui_.setBatteryMilliVolts(host_->batteryMilliVolts());
-    ui_.render(*display_);
-    last_render_ = now_ms;
+    ui_.setNodeName(state_.node_name);
+    ui_.setBlePin(state_.ble_pin);
+    ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
+    uint32_t delay = ui_.render(*display_, now_ms, host_ ? host_->rtcNow() : 0);
+    next_render_ = now_ms + delay;
     dirty_ = false;
   }
 
@@ -240,7 +248,7 @@ class CompanionModule : public Module,
   bool connected_ = false;
   int unread_ = 0;
   bool dirty_ = true;
-  uint32_t last_render_ = 0;
+  uint32_t next_render_ = 0;
 };
 
 }  // namespace corefw

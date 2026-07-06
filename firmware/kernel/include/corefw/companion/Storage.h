@@ -1,12 +1,12 @@
 // PersistentStore — loads and saves the companion's identity, preferences,
 // contacts and channels through a tiny FileStore backend, using the
 // byte-compatible codecs. This is the portable half; a board supplies the
-// FileStore (Adafruit InternalFS on nRF52, an in-memory map in host tests).
+// FileStore (InternalFS/QSPI on nRF52, an in-memory map in host tests).
 //
 // Compatibility & safety: load() reads the existing MeshCore files if present
 // and NEVER formats the filesystem. A device reflashed from MeshCore to corefw
-// keeps its identity (hence its mesh address) and contacts. Only explicit
-// CMD_FACTORY_RESET erases anything.
+// keeps its identity (hence its mesh address) and contacts/channels. Only
+// explicit CMD_FACTORY_RESET erases anything.
 #pragma once
 
 #include <corefw/companion/State.h>
@@ -41,7 +41,7 @@ class PersistentStore {
   explicit PersistentStore(FileStore& fs) : fs_(fs) {}
 
   // --- Identity -----------------------------------------------------------
-  // Loads /identity/_main.id into `id` (+ optional node name). Returns false if
+  // Loads /_main.id into `id` (+ optional node name). Returns false if
   // there is no stored identity (caller then generates a fresh one and saves).
   bool loadIdentity(proto::LocalIdentity& id, char* name, size_t name_cap) {
     char path[48];
@@ -142,8 +142,7 @@ class PersistentStore {
 
  private:
   void identityPath(char* out) {
-    // "/identity/_main.id"
-    std::snprintf(out, 48, "%s/%s.id", IDENTITY_DIR, IDENTITY_NAME);
+    std::snprintf(out, 48, "%s", IDENTITY_FILE);
   }
   FileStore& fs_;
 };

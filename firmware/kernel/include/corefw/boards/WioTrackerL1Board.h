@@ -6,6 +6,11 @@
 
 #include <corefw/Board.h>
 
+#if defined(COREFW_TARGET)
+#include <Arduino.h>
+#include <Wire.h>
+#endif
+
 namespace corefw {
 
 class WioTrackerL1Board : public Board {
@@ -23,7 +28,26 @@ class WioTrackerL1Board : public Board {
 
   int maxTxPowerDbm() const override { return 22; }
 
-  void begin() override { /* bring up buses, GPS rail, radio */ }
+  void begin() override {
+#if defined(COREFW_TARGET)
+    pinMode(PIN_VBAT_READ, INPUT);
+    pinMode(PIN_BUTTON1, INPUT_PULLUP);
+    pinMode(PIN_BUTTON2, INPUT_PULLUP);
+    pinMode(PIN_BUTTON3, INPUT_PULLUP);
+    pinMode(PIN_BUTTON4, INPUT_PULLUP);
+    pinMode(PIN_BUTTON5, INPUT_PULLUP);
+    pinMode(PIN_BUTTON6, INPUT_PULLUP);
+#if defined(PIN_WIRE_SDA) && defined(PIN_WIRE_SCL)
+    Wire.setPins(PIN_WIRE_SDA, PIN_WIRE_SCL);
+#endif
+    Wire.begin();
+#if defined(P_LORA_TX_LED)
+    pinMode(P_LORA_TX_LED, OUTPUT);
+    digitalWrite(P_LORA_TX_LED, LOW);
+#endif
+    delay(10);
+#endif
+  }
   RadioDriver* radio() override { return radio_; }
   void reboot() override { /* NVIC_SystemReset() on target */ }
 

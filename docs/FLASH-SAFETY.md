@@ -2,8 +2,8 @@
 
 A corefw image built for the **Wio Tracker L1** is safe to flash onto a device
 already running the stock MeshCore firmware. It will not brick the device and it
-does not destroy the node's stored identity or preferences. This document
-explains why, and the one caveat.
+does not destroy the node's stored identity, preferences, contacts or channels.
+This document explains why, including the companion QSPI storage layout.
 
 ## No brick
 
@@ -14,7 +14,8 @@ is byte-for-byte the same as MeshCore's `boards/seeed-wio-tracker-l1.json`:
 | Region              | Address                | Written by an app flash? |
 |---------------------|------------------------|--------------------------|
 | MBR + SoftDevice S140 7.3.0 | `0x00000 – 0x27000` | No |
-| **Application (corefw)**    | `0x27000 – 0xED000` | **Yes** |
+| **Application (corefw companion)** | `0x27000 – 0xD4000` | **Yes** |
+| Reserved gap / extra-fs boundary   | `0xD4000 – 0xED000` | No |
 | Adafruit InternalFS (LittleFS) | `0xED000 – 0xF4000` | No |
 | Bootloader + settings          | `0xF4000 – 0x100000` | No |
 
@@ -24,37 +25,34 @@ the device always retains a working bootloader — it can be re-flashed with any
 firmware afterward. The SoftDevice version (S140 7.3.0) matches, so the BLE stack
 the app links against is the one already on the device.
 
-## Storage is preserved, never formatted
+## Storage is preserved
 
 corefw reads and writes the **same on-flash files, in the same byte formats**, as
 MeshCore's `DataStore` (see `firmware/kernel/companion/StorageCodec.h`, verified
 byte-for-byte by `tests/cpp/storage_test.cpp`):
 
-- `/identity/_main.id` — `prv_key(64) || pub_key(32) || name(32)`
-- `/new_prefs` — 137-byte preferences record
-- `/contacts3` — 152 bytes per contact
-- `/channels2` — 68 bytes per channel
+- InternalFS `/_main.id` — `prv_key(64) || pub_key(32) || name(32)`
+- InternalFS `/new_prefs` — 137-byte preferences record
+- QSPI LittleFS `/contacts3` — 152 bytes per contact
+- QSPI LittleFS `/channels2` — 68 bytes per channel
 
-`NRF52FileStore::begin()` **mounts** the existing InternalFS; it never formats.
-Because InternalFS lives at a fixed address below the bootloader (independent of
-the application's linker script), a device reflashed from MeshCore keeps its
-**identity** — and therefore its mesh address / public key — and its
-**preferences**. The node reappears on the mesh as the same node. Only an
-explicit `CMD_FACTORY_RESET` from the companion app erases anything.
+`NRF52FileStore::begin()` mounts InternalFS and the external P25Q16H QSPI
+LittleFS used by MeshCore's Wio companion builds (`-D QSPIFLASH=1`,
+`nrf52840_s140_v7_extrafs.ld`, `board_upload.maximum_size = 708608`). The Wio
+board component uses that same linker script and size cap, so app flashing stops
+before the InternalFS region. The node reappears on the mesh as the same node.
+Only an explicit `CMD_FACTORY_RESET` from the companion app erases anything.
 
-## Caveat: contacts/channels on the QSPI-flash companion layout
+## Layout migration
 
-The stock MeshCore *companion* build for this board (`WioTrackerL1_companion_radio_*`)
-stores `/contacts3` and `/channels2` on the **external QSPI flash** (`-D QSPIFLASH=1`,
-`nrf52840_s140_v7_extrafs.ld`). corefw's MVP keeps all four files on the internal
-LittleFS. Consequences:
+On boot, corefw applies the same primary/secondary split MeshCore expects:
 
-- **Identity and preferences transfer** (both are on InternalFS in every layout).
-- **Contacts and channels may not transfer** on the first boot after reflashing
-  from a MeshCore companion image, because corefw looks for them on InternalFS
-  rather than QSPI. This is non-destructive: nothing is erased, the QSPI copy
-  remains, and the companion app re-syncs contacts. Reading the QSPI store is a
-  planned follow-up (needs the external-flash driver).
-
-Reflashing from a MeshCore **repeater** image (which uses InternalFS for
-everything) transfers contacts and channels too.
+- If `/contacts3`, `/channels2` or `/adv_blobs` are found on InternalFS and the
+  QSPI copy is missing, they are copied to QSPI and the misplaced InternalFS
+  copy is removed.
+- If `/_main.id` or `/new_prefs` are found on QSPI, they are copied back to
+  InternalFS and the misplaced QSPI copy is removed.
+- Old corefw MVP identity files at `/identity/_main.id` are moved once to
+  MeshCore's nRF path, `/_main.id`.
+- If QSPI cannot be mounted, corefw leaves the InternalFS copies in place and
+  falls back to InternalFS for contacts/channels so the device remains usable.
