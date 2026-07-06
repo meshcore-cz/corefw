@@ -1,0 +1,90 @@
+id: sensecap-solar
+type: board
+version: 0.1.0
+status: official
+license: MIT
+description: Seeed SenseCAP Solar Node P1 (nRF52840/XIAO + SX1262, L76KB GPS, headless solar)
+maintainers:
+  - tree@tree.fail
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  board_api: "^0.1"
+
+# Abstract services this board contributes. No display — it is a headless
+# outdoor node — so modules that use_display fall back to a NullDisplay.
+provides:
+  - radio
+  - battery
+  - gps
+
+board:
+  architecture: nrf52840
+  framework: arduino
+  platformio:
+    board: seeed_sensecap_solar
+    platform: nordicnrf52
+    framework: arduino
+    base_env: nrf52
+    # Repeater/companion need an InternalFS region for identity + prefs, so use
+    # the ExtraFS linker script (same as the Wio companion) and its max app size.
+    ldscript: boards/nrf52840_s140_v7_extrafs.ld
+    max_size: 708608
+    support_files:
+      - pio-board/seeed_sensecap_solar.json
+      - pio-board/nrf52840_s140_v7.ld
+      - pio-board/nrf52840_s140_v7_extrafs.ld
+    # The SenseCAP Solar (XIAO nRF52840 module) is not a variant the pinned
+    # Adafruit fork ships, so corefw provides the full variant (pin map + Serial1)
+    # from MeshCore's variants/sensecap_solar, compiled via -I variant.
+    variant_files:
+      - variant/variant.h
+      - variant/variant.cpp
+    platform_packages:
+      - framework-arduinoadafruitnrf52 @ https://github.com/meshcore-dev/Adafruit_nRF52_Arduino#d541301
+  capabilities:
+    radio: true
+    display: false
+    battery: true
+    gps: true
+    bluetooth: true
+    usb: true
+    wifi: false
+    deep_sleep: true
+  limits:
+    max_tx_power_dbm: 22
+    ram_budget: 235520   # from board json maximum_ram_size
+
+# Fixed hardware wiring for this board, emitted as -D defines. These mirror the
+# reference MeshCore variants/sensecap_solar/platformio.ini.
+build:
+  includes:
+    - platform/nrf52
+  defines:
+    SENSECAP_SOLAR: "1"
+    USE_SX1262: "1"
+    RADIO_CLASS: CustomSX1262
+    WRAPPER_CLASS: CustomSX1262Wrapper
+    P_LORA_TX_LED: "12"
+    P_LORA_DIO_1: "1"
+    P_LORA_RESET: "2"
+    P_LORA_BUSY: "3"
+    P_LORA_NSS: "4"
+    # External RX/TX switch: RX enable on GPIO5, TX enable driven by DIO2.
+    SX126X_RXEN: "5"
+    SX126X_TXEN: RADIOLIB_NC
+    SX126X_DIO2_AS_RF_SWITCH: "1"
+    SX126X_DIO3_TCXO_VOLTAGE: "1.8"
+    SX126X_CURRENT_LIMIT: "140"
+    SX126X_RX_BOOSTED_GAIN: "1"
+    LORA_TX_POWER: "22"
+    GPS_BAUD_RATE: "9600"
+    # No display, no buzzer: the shared nRF52 main wires neither when the
+    # corresponding defines (DISPLAY_CLASS / PIN_BUZZER) are absent.
+  src_filter: []
+
+codegen:
+  class: SenseCapSolarBoard
+  header: corefw/boards/SenseCapSolarBoard.h
+  var: board
+  register: registerBoard

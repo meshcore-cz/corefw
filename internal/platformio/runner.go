@@ -27,6 +27,7 @@ type Options struct {
 	Upload     bool
 	Port       string
 	RawLogPath string
+	RawOutput  io.Writer
 	Reporter   progress.Reporter
 }
 
@@ -96,7 +97,7 @@ func Run(opts Options) (*Result, error) {
 	var scanErr error
 	scan := func(stream string, r io.Reader) {
 		defer wg.Done()
-		if err := scanPlatformIO(stream, r, parser, reporter, logFile, &logMu); err != nil {
+		if err := scanPlatformIO(stream, r, parser, reporter, logFile, opts.RawOutput, &logMu); err != nil {
 			scanErrMu.Lock()
 			if scanErr == nil {
 				scanErr = err
@@ -147,13 +148,16 @@ func ManualCommand(outDir, env string, upload bool, port string) string {
 	return c
 }
 
-func scanPlatformIO(stream string, r io.Reader, parser *Parser, reporter progress.Reporter, logFile io.Writer, logMu *sync.Mutex) error {
+func scanPlatformIO(stream string, r io.Reader, parser *Parser, reporter progress.Reporter, logFile io.Writer, rawOutput io.Writer, logMu *sync.Mutex) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
 		logMu.Lock()
 		fmt.Fprintln(logFile, line)
+		if rawOutput != nil {
+			fmt.Fprintln(rawOutput, line)
+		}
 		logMu.Unlock()
 		for _, event := range parser.ParseLine(stream, line) {
 			reporter.Report(event)

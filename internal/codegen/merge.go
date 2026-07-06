@@ -72,8 +72,14 @@ func merge(plan *resolve.Plan) MergedBuild {
 		addLib(b.LibDeps)
 		addInc(b.Includes)
 		// A module that uses a display pulls in the board's concrete display.
+		// DISPLAY_HEADER lets the shared platform main #include the right driver;
+		// a board with no display block leaves both undefined and the main falls
+		// back to a NullDisplay.
 		if b.UsesDisplay && board != nil && board.Display != nil {
 			mb.Defines["DISPLAY_CLASS"] = board.Display.Class
+			if board.Display.Header != "" {
+				mb.Defines["DISPLAY_HEADER"] = quote(board.Display.Header)
+			}
 			addSrc(board.Display.Sources)
 		}
 	}

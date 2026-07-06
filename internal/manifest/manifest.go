@@ -155,7 +155,11 @@ type BoardLimits struct {
 
 // DisplaySpec names a display class and the sources needed to build it.
 type DisplaySpec struct {
-	Class   string   `yaml:"class"`
+	Class string `yaml:"class"`
+	// Header is the include path for Class (e.g.
+	// "drivers/display/sh1106/SH1106Display.h"), emitted as -D DISPLAY_HEADER so
+	// the shared platform main can #include it without naming a controller.
+	Header  string   `yaml:"header"`
 	Sources []string `yaml:"sources"`
 }
 

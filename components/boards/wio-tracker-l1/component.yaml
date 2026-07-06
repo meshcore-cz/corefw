@@ -50,12 +50,13 @@ board:
     ram_budget: 235520   # from board json maximum_ram_size
   display:
     class: SH1106Display
+    header: drivers/display/sh1106/SH1106Display.h
     sources:
       - +<drivers/display/sh1106/*.cpp>
 
 build:
   includes:
-    - boards/wio_tracker_l1
+    - platform/nrf52
   defines:
     WIO_TRACKER_L1: "1"
     USE_SX1262: "1"
@@ -75,8 +76,8 @@ build:
     PIN_OLED_RESET: "-1"
     GPS_BAUD_RATE: "9600"
     LORA_TX_POWER: "22"
-  src_filter:
-    - +<boards/wio_tracker_l1/*.cpp>
+    PIN_BUZZER: "12"   # on-board piezo; the shared nRF52 main wires a buzzer only when defined
+  src_filter: []
   lib_deps:
     - adafruit/Adafruit SH110X @ ^2.1.13
     - adafruit/Adafruit GFX Library @ ^1.12.1

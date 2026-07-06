@@ -5,8 +5,10 @@
 package build
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"time"
 
@@ -22,12 +24,14 @@ import (
 
 // Options controls a build.
 type Options struct {
+	Context     context.Context
 	ProfilePath string
 	OutDir      string // default: build/<name>
 	FirmwareDir string // path to corefw C++ tree (default: ./firmware)
 	Compile     bool   // run `pio run` after generation
 	Upload      bool   // run `pio run -t upload` (flash) after generation
 	Port        string // optional upload port for flashing
+	PIOOutput   io.Writer
 	Reporter    progress.Reporter
 	Logf        func(format string, args ...any)
 }
@@ -146,11 +150,13 @@ func Run(opts Options) (*Result, error) {
 	if opts.Compile || opts.Upload {
 		report(progress.PhasePrepareToolchain, progress.StatusStarted, progress.LevelInfo, "Preparing PlatformIO", "")
 		pioRes, err := platformio.Run(platformio.Options{
-			Dir:      outDir,
-			Env:      gen.EnvName,
-			Upload:   opts.Upload,
-			Port:     opts.Port,
-			Reporter: reporter,
+			Context:   opts.Context,
+			Dir:       outDir,
+			Env:       gen.EnvName,
+			Upload:    opts.Upload,
+			Port:      opts.Port,
+			RawOutput: opts.PIOOutput,
+			Reporter:  reporter,
 		})
 		if errors.Is(err, platformio.ErrNotFound) {
 			report(progress.PhasePrepareToolchain, progress.StatusSkipped, progress.LevelInfo, "PlatformIO not found; skipping "+verb(opts.Upload), platformio.ManualCommand(outDir, gen.EnvName, opts.Upload, opts.Port))

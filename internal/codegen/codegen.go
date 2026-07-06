@@ -268,7 +268,15 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 	srcFilter := []string{"+<*.cpp>"}
 	if len(board.PlatformIO.VariantFiles) > 0 {
 		includes = append(includes, "variant")
-		srcFilter = append(srcFilter, "+<../variant/variant.cpp>")
+		// Compile a variant.cpp only when the board actually ships one. Some nRF52
+		// boards (e.g. the SenseCAP Solar, a XIAO nRF52840 module) ship only a
+		// variant.h override and reuse the core's XIAO variant.cpp for the pin map.
+		for _, rel := range board.PlatformIO.VariantFiles {
+			if filepath.Base(rel) == "variant.cpp" {
+				srcFilter = append(srcFilter, "+<../variant/variant.cpp>")
+				break
+			}
+		}
 	}
 	data := struct {
 		Name, Board, Env, Platform, Framework, PioBoard, LdScript, FirmwareDir string

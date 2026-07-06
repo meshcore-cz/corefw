@@ -2,7 +2,7 @@ package cli
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	bubblesprogress "charm.land/bubbles/v2/progress"
@@ -15,6 +15,14 @@ import (
 	"github.com/arnal/corefw/internal/progress"
 )
 
+type buildUIOptions struct {
+	Stdin       io.Reader
+	Stdout      io.Writer
+	Plain       bool
+	NoColor     bool
+	Interactive bool
+}
+
 type buildEventMsg progress.Event
 type buildEventsClosedMsg struct{}
 
@@ -26,6 +34,7 @@ type buildDoneMsg struct {
 type buildUIModel struct {
 	opts         build.Options
 	events       chan progress.Event
+	runner       BuildRunner
 	spinner      spinner.Model
 	bar          bubblesprogress.Model
 	status       map[progress.Phase]progress.Status
@@ -39,7 +48,7 @@ type buildUIModel struct {
 	width        int
 }
 
-func runBuildUI(opts build.Options) (*build.Result, error) {
+func runBuildUI(opts build.Options, ui buildUIOptions, runner BuildRunner) (*build.Result, error) {
 	events := make(chan progress.Event, 512)
 	opts.Reporter = progress.ReporterFunc(func(event progress.Event) {
 		select {
@@ -48,7 +57,7 @@ func runBuildUI(opts build.Options) (*build.Result, error) {
 		}
 	})
 
-	program := tea.NewProgram(newBuildUIModel(opts, events), tea.WithInput(os.Stdin), tea.WithOutput(os.Stdout))
+	program := tea.NewProgram(newBuildUIModel(opts, events, runner), tea.WithInput(ui.Stdin), tea.WithOutput(ui.Stdout))
 	finalModel, uiErr := program.Run()
 	if model, ok := finalModel.(buildUIModel); ok {
 		if model.buildErr != nil {
@@ -60,16 +69,17 @@ func runBuildUI(opts build.Options) (*build.Result, error) {
 	}
 
 	if uiErr != nil {
-		opts.Reporter = progress.NewPlainReporter(os.Stdout)
-		return build.Run(opts)
+		opts.Reporter = progress.NewPlainReporter(ui.Stdout)
+		return runner.Run(opts.Context, opts)
 	}
 	return nil, fmt.Errorf("build UI exited before the build completed")
 }
 
-func newBuildUIModel(opts build.Options, events chan progress.Event) buildUIModel {
+func newBuildUIModel(opts build.Options, events chan progress.Event, runner BuildRunner) buildUIModel {
 	return buildUIModel{
 		opts:    opts,
 		events:  events,
+		runner:  runner,
 		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("39")))),
 		bar:     bubblesprogress.New(bubblesprogress.WithWidth(40)),
 		status:  make(map[progress.Phase]progress.Status),
@@ -83,7 +93,7 @@ func (m buildUIModel) Init() tea.Cmd {
 	return tea.Batch(
 		func() tea.Msg { return m.spinner.Tick() },
 		waitBuildEvent(m.events),
-		runBuildCommand(m.opts, m.events),
+		runBuildUICommand(m.opts, m.events, m.runner),
 	)
 }
 
@@ -213,16 +223,12 @@ func waitBuildEvent(events <-chan progress.Event) tea.Cmd {
 	}
 }
 
-func runBuildCommand(opts build.Options, events chan progress.Event) tea.Cmd {
+func runBuildUICommand(opts build.Options, events chan progress.Event, runner BuildRunner) tea.Cmd {
 	return func() tea.Msg {
 		defer close(events)
-		result, err := build.Run(opts)
+		result, err := runner.Run(opts.Context, opts)
 		return buildDoneMsg{result: result, err: err}
 	}
-}
-
-func useInteractiveBuildUI() bool {
-	return isInteractiveBuildOutput(int(os.Stdout.Fd()), os.Getenv)
 }
 
 func isInteractiveBuildOutput(fd int, getenv func(string) string) bool {
@@ -233,6 +239,11 @@ func isInteractiveBuildOutput(fd int, getenv func(string) string) bool {
 		return false
 	}
 	return fd >= 0 && term.IsTerminal(fd)
+}
+
+func isTerminalWriter(w io.Writer) bool {
+	f, ok := w.(interface{ Fd() uintptr })
+	return ok && isInteractiveBuildOutput(int(f.Fd()), func(string) string { return "" })
 }
 
 func buildUIPhases(upload bool) []progress.Phase {

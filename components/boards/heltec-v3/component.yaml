@@ -39,6 +39,7 @@ board:
     ram_budget: 327680   # ~320 KiB usable SRAM (early estimate only)
   display:
     class: SSD1306Display
+    header: drivers/display/ssd1306/SSD1306Display.h
     sources:
       - +<drivers/display/ssd1306/*.cpp>
 
@@ -46,7 +47,7 @@ board:
 # board's schematic and must not be changed by users.
 build:
   includes:
-    - boards/heltec_v3
+    - platform/esp32
   defines:
     HELTEC_LORA_V3: "1"
     ESP32_CPU_FREQ: "80"
@@ -74,8 +75,7 @@ build:
     SX126X_CURRENT_LIMIT: "140"
     SX126X_RX_BOOSTED_GAIN: "1"
     LORA_TX_POWER: "22"
-  src_filter:
-    - +<boards/heltec_v3/*.cpp>
+  src_filter: []
   lib_deps:
     - adafruit/Adafruit SSD1306 @ ^2.5.13
     - adafruit/Adafruit GFX Library @ ^1.12.1

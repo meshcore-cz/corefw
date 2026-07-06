@@ -14,7 +14,7 @@
       "+<drivers/crypto/ed25519/*.c>",
       "+<drivers/crypto/sha256/*.c>",
       "+<drivers/crypto/aes/*.c>",
-      "+<boards/*/*.cpp>",
+      "+<platform/*/*.cpp>",
       "+<modules/*/*.cpp>"
     ],
     "flags": [

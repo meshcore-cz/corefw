@@ -80,6 +80,9 @@ radio:
 
 ## Commands
 
+See [docs/CLI.md](docs/CLI.md) for the full command tree, global flags,
+workflow examples, JSON output options and shell completion setup.
+
 | Command | Purpose |
 | --- | --- |
 | `corefw build <profile>` | Resolve, generate and compile a firmware image (`--no-compile` to skip) |

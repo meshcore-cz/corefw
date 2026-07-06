@@ -6,11 +6,12 @@
 package main
 
 import (
+	"context"
 	"os"
 
 	"github.com/arnal/corefw/internal/cli"
 )
 
 func main() {
-	os.Exit(cli.Main(os.Args[1:]))
+	os.Exit(cli.ExecuteContext(context.Background(), os.Args[1:]))
 }
