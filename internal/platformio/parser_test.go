@@ -37,6 +37,66 @@ func TestParserDetectsUploadProgress(t *testing.T) {
 	}
 }
 
+func TestParserDetectsNRFUploadFlow(t *testing.T) {
+	parser := NewParser()
+
+	parser.ParseLine("stdout", "Building in release mode")
+	parser.ParseLine("stdout", "Checking size .pio/build/env/firmware.elf")
+	parser.ParseLine("stdout", "Flash: [=====     ]  48.2% (used 341208 bytes from 708608 bytes)")
+	parser.ParseLine("stdout", "Auto-detected: /dev/cu.usbmodem21201")
+
+	events := parser.ParseLine("stdout", "Forcing reset using 1200bps open/close on port /dev/cu.usbmodem21201")
+	assertContainsEvent(t, events, progress.PhaseCompile, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseLink, progress.StatusSkipped)
+	assertContainsEvent(t, events, progress.PhaseSize, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusStarted)
+
+	events = parser.ParseLine("stdout", "Upgrading target on /dev/cu.usbmodem21201 with DFU package firmware.zip. Flow control is disabled")
+	assertMessage(t, events, progress.PhaseUpload, "Uploading DFU package")
+
+	events = parser.ParseLine("stdout", "########################################")
+	assertMessage(t, events, progress.PhaseUpload, "Uploading DFU package")
+	hashProgress := progressPercent(t, events, progress.PhaseUpload)
+	wantProgress := float64(40) / float64((341208+511)/512)
+	if hashProgress != wantProgress {
+		t.Fatalf("hash progress = %v, want %v", hashProgress, wantProgress)
+	}
+
+	events = parser.ParseLine("stdout", "Activating new firmware")
+	assertMessage(t, events, progress.PhaseUpload, "Activating firmware")
+	if got := progressPercent(t, events, progress.PhaseUpload); got != 1 {
+		t.Fatalf("activation progress = %v, want 1", got)
+	}
+
+	events = parser.ParseLine("stdout", "Device programmed.")
+	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusCompleted)
+
+	if got := parser.UploadPort(); got != "/dev/cu.usbmodem21201" {
+		t.Fatalf("upload port = %q", got)
+	}
+}
+
+func assertMessage(t *testing.T, events []progress.Event, phase progress.Phase, message string) {
+	t.Helper()
+	for _, event := range events {
+		if event.Phase == phase && event.Message == message {
+			return
+		}
+	}
+	t.Fatalf("events did not contain (%s, %q): %+v", phase, message, events)
+}
+
+func progressPercent(t *testing.T, events []progress.Event, phase progress.Phase) float64 {
+	t.Helper()
+	for _, event := range events {
+		if event.Phase == phase && event.Progress != nil && event.Progress.Percent != nil {
+			return *event.Progress.Percent
+		}
+	}
+	t.Fatalf("events did not contain progress for %s: %+v", phase, events)
+	return 0
+}
+
 func TestParserCompletesBuildPhasesWhenUploadStarts(t *testing.T) {
 	parser := NewParser()
 

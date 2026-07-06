@@ -12,8 +12,13 @@ import (
 )
 
 var (
-	sizeLineRE  = regexp.MustCompile(`^(RAM|Flash):\s+\[[^\]]*\]\s+([0-9]+(?:\.[0-9]+)?)%`)
-	uploadPctRE = regexp.MustCompile(`\(([0-9]+)\s*%\)`)
+	sizeLineRE      = regexp.MustCompile(`^(RAM|Flash):\s+\[[^\]]*\]\s+([0-9]+(?:\.[0-9]+)?)%`)
+	sizeUsedLineRE  = regexp.MustCompile(`^(RAM|Flash):\s+\[[^\]]*\]\s+[0-9]+(?:\.[0-9]+)?%\s+\(used\s+([0-9]+)\s+bytes`)
+	uploadPctRE     = regexp.MustCompile(`\(([0-9]+)\s*%\)`)
+	nrfHashLineRE   = regexp.MustCompile(`^#+$`)
+	dfuTargetLine   = "Upgrading target on "
+	dfuActivateLine = "Activating new firmware"
+	dfuDoneLine     = "Device programmed."
 )
 
 // Parser converts PlatformIO output lines into structured progress events.
@@ -25,6 +30,8 @@ type Parser struct {
 	uploadStarted        bool
 	buildPhasesCompleted bool
 	uploadPort           string
+	flashUsedBytes       int64
+	nrfUploadedChunks    int64
 }
 
 // NewParser returns a fresh PlatformIO output parser.
@@ -79,14 +86,10 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 
 	case strings.HasPrefix(line, "Configuring upload protocol") ||
 		strings.HasPrefix(line, "Looking for upload port") ||
+		strings.HasPrefix(line, "Forcing reset ") ||
+		strings.HasPrefix(line, "Waiting for the new upload port") ||
 		strings.HasPrefix(line, "Uploading "):
-		if !p.uploadStarted {
-			p.uploadStarted = true
-			events = append(events, p.completeBuildPhases()...)
-			events = append(events, p.event(progress.PhaseUpload, progress.StatusStarted, progress.LevelInfo, "Uploading firmware", line, nil))
-		} else {
-			events = append(events, p.event(progress.PhaseUpload, progress.StatusProgress, progress.LevelInfo, "Uploading firmware", line, nil))
-		}
+		events = append(events, p.startOrProgressUpload("Uploading firmware", line)...)
 	}
 
 	if strings.HasPrefix(line, "Auto-detected: ") {
@@ -101,11 +104,25 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 		percent := pct / 100
 		events = append(events, p.event(progress.PhaseSize, progress.StatusProgress, progress.LevelInfo, match[1]+" usage", line, &progress.Progress{Percent: &percent}))
 	}
+	if match := sizeUsedLineRE.FindStringSubmatch(line); match != nil && match[1] == "Flash" {
+		p.flashUsedBytes, _ = strconv.ParseInt(match[2], 10, 64)
+	}
 
 	if match := uploadPctRE.FindStringSubmatch(line); match != nil {
 		pct, _ := strconv.ParseFloat(match[1], 64)
 		percent := pct / 100
 		events = append(events, p.event(progress.PhaseUpload, progress.StatusProgress, progress.LevelInfo, "Writing firmware", line, &progress.Progress{Percent: &percent}))
+	}
+
+	switch {
+	case strings.HasPrefix(line, dfuTargetLine):
+		events = append(events, p.startOrProgressUpload("Uploading DFU package", line)...)
+	case nrfHashLineRE.MatchString(line):
+		events = append(events, p.nrfUploadProgress(line)...)
+	case strings.HasPrefix(line, dfuActivateLine):
+		events = append(events, p.uploadProgress("Activating firmware", line, 1)...)
+	case strings.HasPrefix(line, dfuDoneLine):
+		events = append(events, p.event(progress.PhaseUpload, progress.StatusCompleted, progress.LevelInfo, "Device programmed", line, nil))
 	}
 
 	if strings.Contains(line, "[SUCCESS]") {
@@ -117,6 +134,43 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 	}
 
 	return events
+}
+
+func (p *Parser) startOrProgressUpload(message, detail string) []progress.Event {
+	if !p.uploadStarted {
+		p.uploadStarted = true
+		events := p.completeBuildPhases()
+		events = append(events, p.event(progress.PhaseUpload, progress.StatusStarted, progress.LevelInfo, message, detail, nil))
+		return events
+	}
+	return []progress.Event{p.event(progress.PhaseUpload, progress.StatusProgress, progress.LevelInfo, message, detail, nil)}
+}
+
+func (p *Parser) nrfUploadProgress(line string) []progress.Event {
+	p.nrfUploadedChunks += int64(len(line))
+	if p.flashUsedBytes <= 0 {
+		return p.startOrProgressUpload("Uploading DFU package", line)
+	}
+	totalChunks := (p.flashUsedBytes + 511) / 512
+	if totalChunks <= 0 {
+		return p.startOrProgressUpload("Uploading DFU package", line)
+	}
+	percent := float64(p.nrfUploadedChunks) / float64(totalChunks)
+	if percent > 1 {
+		percent = 1
+	}
+	return p.uploadProgress("Uploading DFU package", line, percent)
+}
+
+func (p *Parser) uploadProgress(message, detail string, percent float64) []progress.Event {
+	prog := &progress.Progress{Percent: &percent}
+	if !p.uploadStarted {
+		p.uploadStarted = true
+		events := p.completeBuildPhases()
+		events = append(events, p.event(progress.PhaseUpload, progress.StatusStarted, progress.LevelInfo, message, detail, prog))
+		return events
+	}
+	return []progress.Event{p.event(progress.PhaseUpload, progress.StatusProgress, progress.LevelInfo, message, detail, prog)}
 }
 
 // Complete returns synthetic final events for phases that PlatformIO may not

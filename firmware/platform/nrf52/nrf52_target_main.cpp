@@ -454,7 +454,74 @@ static void showFreezeDiag() {
   g_display.endFrame();
 }
 
+#if defined(COREFW_DIAG_DUMP)
+// READ-ONLY identity/storage diagnostic. Mounts both filesystems (mount only —
+// never formats, never writes) and prints every identity record it finds with
+// its public key, so a clobbered/original identity can be located. Build with
+//   PLATFORMIO_BUILD_FLAGS="-DCOREFW_DIAG_DUMP" pio run -t upload
+// It loops forever at the end, so the normal (writing) setup never runs.
+static void diagDumpIdentity(Adafruit_LittleFS& fs, const char* path) {
+  if (!fs.exists(path)) { Serial.printf("  %s : (absent)\n", path); return; }
+  Adafruit_LittleFS_Namespace::File f(fs);
+  if (!f.open(path, Adafruit_LittleFS_Namespace::FILE_O_READ)) {
+    Serial.printf("  %s : (open failed)\n", path);
+    return;
+  }
+  uint8_t rec[128] = {};
+  size_t n = f.read(rec, sizeof(rec));
+  f.close();
+  Serial.printf("  %s : %u bytes\n", path, unsigned(n));
+  if (n >= 96) {  // prv(64) || pub(32) [ || name(32) ]
+    Serial.print("      pubkey = ");
+    for (int i = 64; i < 96; i++) Serial.printf("%02x", rec[i]);
+    Serial.println();
+  }
+  if (n > 96 && rec[96]) {
+    Serial.print("      name   = ");
+    for (int i = 96; i < int(n) && i < 128 && rec[i]; i++) Serial.write(rec[i]);
+    Serial.println();
+  }
+}
+
+static void diagListRoot(Adafruit_LittleFS& fs, const char* label) {
+  Serial.printf("=== %s ===\n", label);
+  Adafruit_LittleFS_Namespace::File dir(fs);
+  if (dir.open("/", Adafruit_LittleFS_Namespace::FILE_O_READ)) {
+    for (Adafruit_LittleFS_Namespace::File e = dir.openNextFile(); e; e = dir.openNextFile()) {
+      Serial.printf("  file: /%-14s %lu bytes\n", e.name(), (unsigned long)e.size());
+      e.close();
+    }
+    dir.close();
+  }
+  diagDumpIdentity(fs, "/_main.id");
+  diagDumpIdentity(fs, "/identity/_main.id");  // old corefw path
+}
+
+static void runIdentityDiag() {
+  Serial.begin(115200);
+  uint32_t t0 = millis();
+  while (!Serial && millis() - t0 < 5000) {}
+  delay(800);
+  Serial.println("\n\n### corefw identity diagnostic — READ-ONLY, writes nothing ###");
+  InternalFS.begin();
+  diagListRoot(InternalFS, "InternalFS");
+#if defined(QSPIFLASH)
+  static board::NRF52QSPIFileSystem qspi;
+  if (qspi.begin()) {
+    diagListRoot(qspi, "QSPI external flash");
+  } else {
+    Serial.println("=== QSPI external flash === (mount failed / no chip)");
+  }
+#endif
+  Serial.println("### done. Power off safely — nothing was written. ###");
+  for (;;) delay(1000);
+}
+#endif  // COREFW_DIAG_DUMP
+
 void setup() {
+#if defined(COREFW_DIAG_DUMP)
+  runIdentityDiag();  // never returns — no writes happen past this point
+#endif
   // Snapshot why we rebooted before anything else touches the register — a
   // "WATCHDOG" reason here is the signature of the freeze we are chasing.
   board::captureBoot();  // snapshot reset reason + last crumb before overwriting

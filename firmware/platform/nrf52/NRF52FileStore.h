@@ -145,8 +145,13 @@ class NRF52FileStore : public companion::FileStore {
     moveIfMissing(InternalFS, qspi_, companion::ADV_BLOBS_FILE);
     moveIfMissing(InternalFS, qspi_, companion::CONTACTS_FILE);
     moveIfMissing(InternalFS, qspi_, companion::CHANNELS_FILE);
-    moveIfPresent(qspi_, InternalFS, companion::IDENTITY_FILE);
-    moveIfPresent(qspi_, InternalFS, companion::PREFS_FILE);
+    // Identity and prefs are authoritative on InternalFS (this matches stock
+    // MeshCore: loadMainIdentity and "/new_prefs" both read the primary FS). Only
+    // pull them off QSPI when InternalFS has none — NEVER overwrite an existing
+    // InternalFS identity with a stale QSPI copy, or the node's keys and name get
+    // clobbered. (moveIfPresent here previously did exactly that.)
+    moveIfMissing(qspi_, InternalFS, companion::IDENTITY_FILE);
+    moveIfMissing(qspi_, InternalFS, companion::PREFS_FILE);
 #endif
   }
 

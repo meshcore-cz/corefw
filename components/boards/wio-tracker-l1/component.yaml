@@ -76,13 +76,16 @@ build:
     SX126X_RX_BOOSTED_GAIN: "1"
     DISPLAY_ADDRESS: "0x3D"
     QSPIFLASH: "1"
-    # COREFW_ENABLE_QSPI_STORE (contacts/channels on external QSPI, where stock
-    # MeshCore keeps them) is DISABLED: every mount attempt — via Adafruit_SPIFlash
-    # AND via raw nrfx_qspi with chip-wake — power-cycles the chip before any RAM
-    # or flash guard can commit (bootloader ends up in DFU/blinking). Needs SWD/
-    # hardware debugging to root-cause. Code is complete in NRF52QSPIFileSystem.h /
-    # NRF52FileStore.h; flip this back on once the brownout is understood.
-    # COREFW_ENABLE_QSPI_STORE: "1"
+    # COREFW_ENABLE_QSPI_STORE: contacts/channels/adv_blobs on the external QSPI
+    # flash, where stock MeshCore keeps them (so a device reflashed from stock
+    # keeps its contact list). EXPERIMENTAL / UNDER TRIAL: earlier hardware runs
+    # saw the QSPI mount brown the chip out into the DFU bootloader (blinking).
+    # The NRF52FileStore /qspi_bad marker is meant to latch it off after one bad
+    # boot; the open question is whether the brownout hits before that marker
+    # commits to InternalFS. Recovery if it boot-loops into DFU: reflash a build
+    # with this line commented out (app-only flash — softdevice/bootloader are
+    # untouched, so it cannot brick). See NRF52QSPIFileSystem.h / NRF52FileStore.h.
+    COREFW_ENABLE_QSPI_STORE: "1"
     PIN_OLED_RESET: "-1"
     GPS_BAUD_RATE: "9600"
     LORA_TX_POWER: "22"
