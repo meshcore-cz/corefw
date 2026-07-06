@@ -77,6 +77,17 @@ class Packet {
   void setPathHashSizeAndCount(uint8_t sz, uint8_t n) {
     path_len = uint16_t(((sz - 1) << 6) | (n & 63));
   }
+  // Set just the hash count, preserving the encoded hash size.
+  void setPathHashCount(uint8_t n) {
+    path_len = uint16_t((path_len & ~uint16_t(63)) | (n & 63));
+  }
+
+  // Mark a packet so routers will not retransmit it (header sentinel 0xFF).
+  void markDoNotRetransmit() { header = 0xFF; }
+  bool isMarkedDoNotRetransmit() const { return header == 0xFF; }
+
+  // SNR of the last reception, in dB (stored as quarter-dB in `snr`).
+  float snrDb() const { return float(snr) / 4.0f; }
 
   static bool isValidPathLen(uint8_t pl) {
     uint8_t hash_count = pl & 63;

@@ -99,10 +99,12 @@ components/           built-in ("official") components (embedded in the binary)
   policies/           simple-power
 firmware/             the C++ kernel & component implementations
   kernel/             mechanisms: protocol, events, power, Kernel API
-    protocol/         wire-compatible Packet, AdvertData, Identity, Advert (+ host tests)
+    protocol/         wire-compatible Packet, AdvertData, Identity, Advert, PacketHash
+    runtime/          Dispatcher (radio scheduler), FloodRouter, Dedup, Airtime, Clock
     include/corefw/   the public Board/Module/Policy/Mesh/Radio/Kernel API
   drivers/
     crypto/ed25519/   vendored orlp/ed25519 (same lib as MeshCore) — see its LICENSE
+    crypto/sha256/    packet-hash digest (matches Core Protocol packet hash)
     radio/sx1262/     SX1262 RadioDriver (target-only, RadioLib)
 profiles/             example build profiles
 examples/             an example external component

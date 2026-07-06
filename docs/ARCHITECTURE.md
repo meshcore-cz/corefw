@@ -51,6 +51,28 @@ This matters because MeshCore has **network-wide** (airtime, duty cycle) and
 **battery-wide** constraints an ordinary sensor-component model does not. The
 kernel keeps ownership of radio scheduling and power arbitration.
 
+### The radio scheduler (implemented & host-tested)
+
+`firmware/kernel/runtime/` realises the guarded boundary concretely:
+
+- **`Dispatcher`** implements `MeshService`. Modules call `send()`/`subscribe()`;
+  it pumps received frames through the router, delivers local packets to
+  subscribers, queues forwards, and drains the TX queue onto the radio only when
+  the duty-cycle limiter permits. It owns *when* things go on air.
+- **`FloodRouter`** is pure logic: on a fresh flood packet it appends the node's
+  hash to the path, bumps the count and schedules a retransmit (lower priority
+  the further a packet has travelled) — matching the reference `routeRecvPacket`.
+- **`Dedup`** is a 160-entry ring of `SHA256(type‖payload)[:8]` hashes. Because
+  the hash excludes the mutating path, echoes of a packet we already forwarded
+  are suppressed — the same property the reference firmware relies on.
+- **`Airtime`** computes LoRa time-on-air (Semtech formula) and enforces the
+  per-sub-band off-time rule, so the kernel keeps the whole mesh within duty.
+
+`runtime_test.cpp` drives all of this with a fake radio + virtual clock: a fresh
+flood is delivered and re-broadcast with the node's hash appended; duplicates and
+echoes are dropped; and a second transmission is held until the duty cycle
+permits.
+
 ### Central power coordination
 
 Modules submit *requirements*; the `PowerCoordinator` decides the schedule:
