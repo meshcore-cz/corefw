@@ -213,8 +213,8 @@ class HeltecMeshSender : public companion::MeshSender {
   }
   bool sendZeroHop(proto::Packet& pkt) override {
     if (!g_dispatcher) return false;
-    setRoute(pkt, proto::ROUTE_FLOOD);
-    pkt.setPathHashSizeAndCount(1, 0);
+    setRoute(pkt, proto::ROUTE_DIRECT);
+    pkt.path_len = 0;
     g_dispatcher->send(pkt);
     return true;
   }
