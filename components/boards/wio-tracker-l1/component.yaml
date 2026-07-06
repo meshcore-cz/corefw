@@ -53,6 +53,16 @@ board:
     header: drivers/display/sh1106/SH1106Display.h
     sources:
       - +<drivers/display/sh1106/*.cpp>
+  # Profile fallbacks so a minimal profile (board + a module transport) builds a
+  # complete image. A profile's own radio:/policies: override these.
+  defaults:
+    radio:
+      region: eu868
+      freq: 869.525
+      bandwidth: 250
+      spreading_factor: 11
+    policies:
+      power: simple-power
 
 build:
   includes:

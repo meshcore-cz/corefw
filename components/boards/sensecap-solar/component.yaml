@@ -54,6 +54,16 @@ board:
   limits:
     max_tx_power_dbm: 22
     ram_budget: 235520   # from board json maximum_ram_size
+  # Profile fallbacks so a minimal profile (board + a module transport) builds a
+  # complete image. A profile's own radio:/policies: override these.
+  defaults:
+    radio:
+      region: eu868
+      freq: 869.525
+      bandwidth: 250
+      spreading_factor: 11
+    policies:
+      power: simple-power
 
 # Fixed hardware wiring for this board, emitted as -D defines. These mirror the
 # reference MeshCore variants/sensecap_solar/platformio.ini.

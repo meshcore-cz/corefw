@@ -123,6 +123,23 @@ type BoardSpec struct {
 	// Display is the concrete display class + source a board offers, so modules
 	// can request "display" without knowing which controller a board uses.
 	Display *DisplaySpec `yaml:"display,omitempty"`
+	// Defaults supply profile fallbacks so a minimal profile (just a board and a
+	// module) still produces a complete, buildable image. Anything a profile
+	// specifies overrides these; see BoardDefaults.
+	Defaults BoardDefaults `yaml:"defaults"`
+}
+
+// BoardDefaults are the fallbacks a board contributes to a profile that omits
+// them. A profile's own radio block overrides these per key; a profile policy in
+// a given category overrides the board's default for that category.
+type BoardDefaults struct {
+	// Radio is the default regional/RF block (region, freq, bandwidth,
+	// spreading_factor) — the same shape as a profile's radio: section.
+	Radio map[string]any `yaml:"radio"`
+	// Policies maps a policy category (power, routing, ...) to the default policy
+	// component id to apply when the profile does not set that category. Options
+	// come from the policy's own schema defaults.
+	Policies map[string]string `yaml:"policies"`
 }
 
 // PlatformIOBoard captures the target-specific bits the generator needs to emit

@@ -64,6 +64,10 @@ func Resolve(p *profile.Profile, reg *registry.Registry) (*Plan, error) {
 		}
 	}
 
+	// Radio defaults: a profile may omit the radio block entirely (or set only
+	// some keys) and inherit the board's defaults. Profile keys win per-key.
+	plan.Radio = mergeRadioDefaults(boardComp.Manifest.Board, p.Radio)
+
 	// Available "services" a dependent can require: board capabilities +
 	// everything a selected component `provides`.
 	provided := map[string]string{} // service -> providing component id
@@ -101,8 +105,12 @@ func Resolve(p *profile.Profile, reg *registry.Registry) (*Plan, error) {
 	}
 
 	// --- Policies ----------------------------------------------------------
-	for _, category := range sortedPolicyKeys(p.Policies) {
-		ref := p.Policies[category]
+	// Effective policies = the board's default policies for each category the
+	// profile leaves unset, overlaid by the profile's own policies. So a minimal
+	// profile still gets (e.g.) a power policy with schema-default thresholds.
+	effPolicies := effectivePolicies(boardComp.Manifest.Board, p.Policies)
+	for _, category := range sortedPolicyKeys(effPolicies) {
+		ref := effPolicies[category]
 		comp, ok := reg.Get(ref.ID)
 		if !ok {
 			return nil, fmt.Errorf("unknown policy %q (category %q)", ref.ID, category)
@@ -250,6 +258,40 @@ func expandAutoLoad(refs []profile.ComponentRef, reg *registry.Registry, warning
 			}
 		}
 		add(r)
+	}
+	return out
+}
+
+// mergeRadioDefaults overlays a profile's radio block onto the board's radio
+// defaults (profile keys win). Returns nil when neither supplies anything.
+func mergeRadioDefaults(board *manifest.BoardSpec, profileRadio map[string]any) map[string]any {
+	out := map[string]any{}
+	if board != nil {
+		for k, v := range board.Defaults.Radio {
+			out[k] = v
+		}
+	}
+	for k, v := range profileRadio {
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// effectivePolicies combines the board's default policies (one component id per
+// category) with the profile's policies. A profile entry in a category fully
+// replaces the board default for that category (options come from the profile).
+func effectivePolicies(board *manifest.BoardSpec, profilePolicies map[string]profile.ComponentRef) map[string]profile.ComponentRef {
+	out := map[string]profile.ComponentRef{}
+	if board != nil {
+		for category, id := range board.Defaults.Policies {
+			out[category] = profile.ComponentRef{ID: id, Options: map[string]any{}}
+		}
+	}
+	for category, ref := range profilePolicies {
+		out[category] = ref
 	}
 	return out
 }

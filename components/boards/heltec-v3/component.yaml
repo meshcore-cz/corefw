@@ -42,6 +42,16 @@ board:
     header: drivers/display/ssd1306/SSD1306Display.h
     sources:
       - +<drivers/display/ssd1306/*.cpp>
+  # Profile fallbacks so a minimal profile (board + a module transport) builds a
+  # complete image. A profile's own radio:/policies: override these.
+  defaults:
+    radio:
+      region: eu868
+      freq: 869.525
+      bandwidth: 250
+      spreading_factor: 11
+    policies:
+      power: simple-power
 
 # Fixed hardware wiring for this board, emitted as -D defines. These mirror the
 # board's schematic and must not be changed by users.

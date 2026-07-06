@@ -2,30 +2,12 @@
 # companion. Talks the framed companion protocol straight over the USB CDC, so a
 # desktop app or serial bridge can drive it with no BLE stack involved.
 #
-# Build it with:  corefw build profiles/heltec-v3-companion-usb.yaml
+# Radio and power policy come from the board defaults. Build it with:
+#   corefw build profiles/heltec-v3-companion-usb.yaml
 name: heltec-v3-companion-usb
 platform: corefw@0.1
-
 board: heltec-v3
 
 modules:
   - type: companion
     transport: usb
-    max_contacts: 350   # match MeshCore's companion so a full contact set carries over
-    max_group_channels: 40
-
-policies:
-  power:
-    type: simple-power
-    low_battery: 25
-    critical_battery: 10
-    tx_power: 22
-
-radio:
-  region: eu868
-  freq: 869.525
-  bandwidth: 250
-  spreading_factor: 11
-
-features:
-  display: true
