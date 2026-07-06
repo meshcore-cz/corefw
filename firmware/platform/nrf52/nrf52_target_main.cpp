@@ -318,6 +318,7 @@ class WioMeshSender : public companion::MeshSender {
         ad.lon = st.lon_e6;
       }
     }
+    g_kernel.applyAdvertDecorators(ad);  // let extension components enrich it
     proto::Packet pkt;
     if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
     setRoute(pkt, proto::ROUTE_FLOOD);

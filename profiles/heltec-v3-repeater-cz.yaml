@@ -1,0 +1,19 @@
+# A Heltec V3 repeater that advertises advanced feature flags — the corefw
+# replacement for the meshcore-cz "cz-advert-features" fork. Instead of forking
+# the firmware, drop in the `cz-advert-features` extension and set the flags
+# here. Build with:
+#   corefw build profiles/heltec-v3-repeater-cz.yaml
+name: heltec-v3-repeater-cz
+platform: corefw@0.1
+board: heltec-v3
+
+modules:
+  - type: repeater
+    advert_name: "CoreFW CZ Repeater"
+    admin_password: "changeme"
+  # Optional extension: stamps feat1/feat2 into every self-advert this node
+  # emits. Equivalent to `set advert.features 0x0001 0x00A0` upstream, but
+  # resolved at build time — no fork, no runtime CLI needed.
+  - type: cz-advert-features
+    feat1: 0x0001
+    feat2: 0x00A0

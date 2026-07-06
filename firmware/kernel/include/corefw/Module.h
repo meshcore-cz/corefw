@@ -10,6 +10,8 @@
 
 namespace corefw {
 
+namespace proto { struct AdvertData; }
+
 class Kernel;
 class MeshService;
 class PowerCoordinator;
@@ -50,6 +52,13 @@ class Module {
   virtual void afterWake() {}
 
   virtual void shutdown() {}
+
+  // Extension hook: contribute to a self-advert before it is signed. The kernel
+  // calls this on every registered module (via Kernel::applyAdvertDecorators)
+  // when building an advert, so optional extension components — e.g. an advert
+  // feature-flag extension — can enrich the advert without any core changes or
+  // a fork. The default is a no-op.
+  virtual void decorateAdvert(proto::AdvertData&) {}
 };
 
 }  // namespace corefw

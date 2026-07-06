@@ -1,0 +1,17 @@
+properties:
+  feat1:
+    type: integer
+    minimum: 0
+    maximum: 65535
+    default: 0
+    description: >-
+      Advert feature bitmask #1. 0 omits the field (wire-compatible default),
+      matching `set advert.features <feat1> ...` upstream. Decimal or 0x hex.
+  feat2:
+    type: integer
+    minimum: 0
+    maximum: 65535
+    default: 0
+    description: >-
+      Advert feature bitmask #2. 0 omits the field. Conventionally only set when
+      feat1 is also set (mirrors the upstream ordering), but not enforced here.

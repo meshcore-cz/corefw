@@ -9,5 +9,5 @@ import "embed"
 // sources live under firmware/ and are referenced by path from the manifests;
 // only the host-side descriptors are embedded here.
 //
-//go:embed all:boards all:modules all:policies
+//go:embed all:boards all:modules all:policies all:extensions
 var FS embed.FS

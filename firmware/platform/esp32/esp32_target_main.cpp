@@ -279,6 +279,7 @@ class HeltecMeshSender : public companion::MeshSender {
       ad.lat = st.lat_e6;
       ad.lon = st.lon_e6;
     }
+    g_kernel.applyAdvertDecorators(ad);  // let extension components enrich it
     proto::Packet pkt;
     if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
     setRoute(pkt, proto::ROUTE_FLOOD);

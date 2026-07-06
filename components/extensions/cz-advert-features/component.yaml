@@ -1,0 +1,50 @@
+# cz-advert-features — an optional advert extension.
+#
+# The corefw-native replacement for the meshcore-cz "cz-advert-features" fork
+# (https://github.com/meshcore-dev/MeshCore/compare/main...meshcore-cz:MeshCoreCZ:cz-advert-features).
+# Upstream forked the whole firmware to add two 16-bit advert feature flags; here
+# it is a self-contained extension that hooks the advert-build path through
+# Module::decorateAdvert. No fork of the platform is required.
+#
+# Use it in a profile:
+#
+#   modules:
+#     - type: repeater
+#       advert_name: "CoreFW CZ Repeater"
+#     - type: cz-advert-features
+#       feat1: 0x0001
+#       feat2: 0x00A0
+#
+# Or ship it from its own repo and pull it in without touching this tree:
+#
+#   external_components:
+#     - source: github://youruser/corefw-cz-advert-features@v0.1.0
+#       components: [cz-advert-features]
+id: cz-advert-features
+type: module
+version: 0.1.0
+status: community-maintained
+license: MIT
+description: Stamp advanced advert feature flags (feat1/feat2) into self-adverts
+maintainers:
+  - tree@tree.fail
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  module_api: "^0.1"
+
+# Tiny: two uint16 fields and a virtual override.
+resources:
+  flash: 256
+  ram_static: 8
+
+# Header-only; the kernel library compiles it once its header is referenced by
+# the generated composition root. Nothing to add to the src filter.
+codegen:
+  class: CzAdvertFeatures
+  header: corefw/extensions/CzAdvertFeatures.h
+  var: cz_advert_features
+  register: registerModule
+  setters:
+    feat1: setFeat1
+    feat2: setFeat2

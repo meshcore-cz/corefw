@@ -48,6 +48,15 @@ class Kernel {
     for (int i = 0; i < module_count_; ++i) modules_[i]->onEvent(e);
   }
 
+  // applyAdvertDecorators lets every registered module enrich an advert before
+  // it is signed and sent. The platform's advert-build path calls this after
+  // populating the base fields (type, name, location). Extension components
+  // override Module::decorateAdvert to hook in; nothing else needs to know they
+  // exist. See components/extensions/ for the pattern.
+  void applyAdvertDecorators(proto::AdvertData& ad) {
+    for (int i = 0; i < module_count_; ++i) modules_[i]->decorateAdvert(ad);
+  }
+
  private:
   Board* board_ = nullptr;
   PowerPolicy* power_policy_ = nullptr;
