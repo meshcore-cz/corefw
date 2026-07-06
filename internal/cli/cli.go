@@ -10,7 +10,9 @@ import (
 	"github.com/arnal/corefw/internal/build"
 	"github.com/arnal/corefw/internal/lock"
 	"github.com/arnal/corefw/internal/manifest"
+	"github.com/arnal/corefw/internal/platformio"
 	"github.com/arnal/corefw/internal/profile"
+	"github.com/arnal/corefw/internal/progress"
 	"github.com/arnal/corefw/internal/registry"
 	"github.com/arnal/corefw/internal/resolve"
 )
@@ -76,20 +78,21 @@ func cmdBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "build requires exactly one profile path")
 		return 2
 	}
-	res, err := build.Run(build.Options{
+	opts := build.Options{
 		ProfilePath: fs.Arg(0),
 		OutDir:      *out,
 		FirmwareDir: *firmware,
 		Compile:     !*noCompile,
-		Logf:        logln,
-	})
+	}
+	res, err := runBuild(opts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		return 1
 	}
 	reportGenerated(res.OutDir, res.Gen.Files)
+	reportPIOLog(res)
 	if *noCompile {
-		fmt.Printf("\nBuild with: pio run -e %s -d %s\n", res.Gen.EnvName, res.OutDir)
+		fmt.Printf("\nBuild with: %s\n", platformio.ManualCommand(res.OutDir, res.Gen.EnvName, false, ""))
 	}
 	return 0
 }
@@ -106,19 +109,19 @@ func cmdFlash(args []string) int {
 		fmt.Fprintln(os.Stderr, "flash requires exactly one profile path")
 		return 2
 	}
-	res, err := build.Run(build.Options{
+	res, err := runBuild(build.Options{
 		ProfilePath: fs.Arg(0),
 		OutDir:      *out,
 		FirmwareDir: *firmware,
 		Upload:      true,
 		Port:        *port,
-		Logf:        logln,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		return 1
 	}
 	reportGenerated(res.OutDir, res.Gen.Files)
+	reportPIOLog(res)
 	return 0
 }
 
@@ -128,6 +131,20 @@ func reportGenerated(outDir string, files []string) {
 		fmt.Printf("  %s\n", f)
 	}
 	fmt.Printf("  corefw.lock\n")
+}
+
+func reportPIOLog(res *build.Result) {
+	if res != nil && res.PIOLog != "" {
+		fmt.Printf("\nPlatformIO log: %s\n", res.PIOLog)
+	}
+}
+
+func runBuild(opts build.Options) (*build.Result, error) {
+	if useInteractiveBuildUI() && (opts.Compile || opts.Upload) {
+		return runBuildUI(opts)
+	}
+	opts.Reporter = progress.NewPlainReporter(os.Stdout)
+	return build.Run(opts)
 }
 
 func cmdValidate(args []string) int {
@@ -202,8 +219,4 @@ func loadPlan(path string) (*resolve.Plan, error) {
 	// Note: validate/lock intentionally do not fetch git sources; they operate
 	// on built-in + already-cached components. `build` performs fetching.
 	return resolve.Resolve(p, reg)
-}
-
-func logln(format string, args ...any) {
-	fmt.Printf(format+"\n", args...)
 }

@@ -5,14 +5,16 @@
 package build
 
 import (
+	"errors"
 	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/arnal/corefw/internal/codegen"
 	"github.com/arnal/corefw/internal/lock"
+	"github.com/arnal/corefw/internal/platformio"
 	"github.com/arnal/corefw/internal/profile"
+	"github.com/arnal/corefw/internal/progress"
 	"github.com/arnal/corefw/internal/registry"
 	"github.com/arnal/corefw/internal/resolve"
 	"github.com/arnal/corefw/internal/source"
@@ -26,6 +28,7 @@ type Options struct {
 	Compile     bool   // run `pio run` after generation
 	Upload      bool   // run `pio run -t upload` (flash) after generation
 	Port        string // optional upload port for flashing
+	Reporter    progress.Reporter
 	Logf        func(format string, args ...any)
 }
 
@@ -36,6 +39,7 @@ type Result struct {
 	Lockfile *lock.Lockfile
 	LockPath string
 	OutDir   string
+	PIOLog   string
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -46,14 +50,30 @@ func (o *Options) logf(format string, args ...any) {
 
 // Run executes the pipeline up to (and optionally including) compilation.
 func Run(opts Options) (*Result, error) {
-	opts.logf("Loading profile %s", opts.ProfilePath)
+	reporter := progress.Safe(opts.Reporter)
+	report := func(phase progress.Phase, status progress.Status, level progress.Level, message, detail string) {
+		event := progress.Event{
+			Time:    time.Now(),
+			Phase:   phase,
+			Status:  status,
+			Level:   level,
+			Message: message,
+			Detail:  detail,
+		}
+		reporter.Report(event)
+		opts.logEvent(event)
+	}
+
+	report(progress.PhaseLoadProfile, progress.StatusStarted, progress.LevelInfo, "Loading profile", opts.ProfilePath)
 	p, err := profile.Load(opts.ProfilePath)
 	if err != nil {
+		report(progress.PhaseLoadProfile, progress.StatusFailed, progress.LevelError, "Failed to load profile", err.Error())
 		return nil, err
 	}
 	if p.Name == "" {
 		p.Name = baseName(opts.ProfilePath)
 	}
+	report(progress.PhaseLoadProfile, progress.StatusCompleted, progress.LevelInfo, "Loaded profile", p.Name)
 
 	reg, err := registry.New()
 	if err != nil {
@@ -61,24 +81,33 @@ func Run(opts Options) (*Result, error) {
 	}
 
 	if len(p.External) > 0 {
-		opts.logf("Resolving external components")
+		report(progress.PhaseFetchComponents, progress.StatusStarted, progress.LevelInfo, "Resolving external components", "")
 		fetcher := &source.Fetcher{
 			BaseDir: filepath.Dir(mustAbs(opts.ProfilePath)),
-			Logf:    opts.Logf,
+			Logf: func(format string, args ...any) {
+				msg := fmt.Sprintf(format, args...)
+				report(progress.PhaseFetchComponents, progress.StatusProgress, progress.LevelInfo, msg, "")
+			},
 		}
 		if _, err := fetcher.Resolve(reg, p.External); err != nil {
+			report(progress.PhaseFetchComponents, progress.StatusFailed, progress.LevelError, "Failed to resolve external components", err.Error())
 			return nil, err
 		}
+		report(progress.PhaseFetchComponents, progress.StatusCompleted, progress.LevelInfo, "Resolved external components", "")
+	} else {
+		report(progress.PhaseFetchComponents, progress.StatusSkipped, progress.LevelInfo, "No external components", "")
 	}
 
-	opts.logf("Resolving component graph")
+	report(progress.PhaseResolveComponents, progress.StatusStarted, progress.LevelInfo, "Resolving component graph", "")
 	plan, err := resolve.Resolve(p, reg)
 	if err != nil {
+		report(progress.PhaseResolveComponents, progress.StatusFailed, progress.LevelError, "Failed to resolve component graph", err.Error())
 		return nil, err
 	}
 	for _, w := range plan.Warnings {
-		opts.logf("  warning: %s", w)
+		report(progress.PhaseResolveComponents, progress.StatusWarning, progress.LevelWarning, "Component graph warning", w)
 	}
+	report(progress.PhaseResolveComponents, progress.StatusCompleted, progress.LevelInfo, "Resolved component graph", "")
 
 	outDir := opts.OutDir
 	if outDir == "" {
@@ -92,18 +121,22 @@ func Run(opts Options) (*Result, error) {
 		firmwareDir = abs
 	}
 
-	opts.logf("Generating project in %s", outDir)
+	report(progress.PhaseGenerateProject, progress.StatusStarted, progress.LevelInfo, "Generating PlatformIO project", outDir)
 	gen, err := codegen.Generate(plan, codegen.Options{OutDir: outDir, FirmwareDir: firmwareDir})
 	if err != nil {
+		report(progress.PhaseGenerateProject, progress.StatusFailed, progress.LevelError, "Failed to generate PlatformIO project", err.Error())
 		return nil, err
 	}
+	report(progress.PhaseGenerateProject, progress.StatusCompleted, progress.LevelInfo, "Generated PlatformIO project", outDir)
 
+	report(progress.PhaseWriteLockfile, progress.StatusStarted, progress.LevelInfo, "Writing lockfile", "")
 	lf := lock.Build(plan)
 	lockPath, err := lock.WriteLock(outDir, lf)
 	if err != nil {
+		report(progress.PhaseWriteLockfile, progress.StatusFailed, progress.LevelError, "Failed to write lockfile", err.Error())
 		return nil, err
 	}
-	opts.logf("Wrote %s (config %s)", lockPath, short(lf.ConfigHash))
+	report(progress.PhaseWriteLockfile, progress.StatusCompleted, progress.LevelInfo, "Wrote lockfile", fmt.Sprintf("%s (config %s)", lockPath, short(lf.ConfigHash)))
 
 	res := &Result{Plan: plan, Gen: gen, Lockfile: lf, LockPath: lockPath, OutDir: outDir}
 
@@ -111,34 +144,26 @@ func Run(opts Options) (*Result, error) {
 	// the toolchain). Rather than fail the whole build, degrade to generation
 	// and tell the user how to compile/flash by hand.
 	if opts.Compile || opts.Upload {
-		if _, err := exec.LookPath("pio"); err != nil {
-			opts.logf("PlatformIO (pio) not found in PATH — skipping %s.", verb(opts.Upload))
-			opts.logf("  Install it (https://platformio.org) then run: %s", manualCmd(outDir, gen.EnvName, opts.Upload, opts.Port))
+		report(progress.PhasePrepareToolchain, progress.StatusStarted, progress.LevelInfo, "Preparing PlatformIO", "")
+		pioRes, err := platformio.Run(platformio.Options{
+			Dir:      outDir,
+			Env:      gen.EnvName,
+			Upload:   opts.Upload,
+			Port:     opts.Port,
+			Reporter: reporter,
+		})
+		if errors.Is(err, platformio.ErrNotFound) {
+			report(progress.PhasePrepareToolchain, progress.StatusSkipped, progress.LevelInfo, "PlatformIO not found; skipping "+verb(opts.Upload), platformio.ManualCommand(outDir, gen.EnvName, opts.Upload, opts.Port))
 			return res, nil
 		}
-		opts.logf("%s firmware with PlatformIO", title(opts.Upload))
-		if err := runPIO(outDir, gen.EnvName, opts.Upload, opts.Port, opts.Logf); err != nil {
+		if pioRes != nil {
+			res.PIOLog = pioRes.RawLogPath
+		}
+		if err != nil {
 			return res, err
 		}
 	}
 	return res, nil
-}
-
-// runPIO invokes PlatformIO to build (or, when upload is true, build+flash) the
-// generated env in outDir.
-func runPIO(outDir, env string, upload bool, port string, logf func(string, ...any)) error {
-	args := []string{"run", "-e", env}
-	if upload {
-		args = append(args, "-t", "upload")
-		if port != "" {
-			args = append(args, "--upload-port", port)
-		}
-	}
-	cmd := exec.Command("pio", args...)
-	cmd.Dir = outDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
 }
 
 func verb(upload bool) string {
@@ -146,24 +171,6 @@ func verb(upload bool) string {
 		return "flash"
 	}
 	return "compile"
-}
-
-func title(upload bool) string {
-	if upload {
-		return "Flashing"
-	}
-	return "Compiling"
-}
-
-func manualCmd(outDir, env string, upload bool, port string) string {
-	c := fmt.Sprintf("pio run -e %s -d %s", env, outDir)
-	if upload {
-		c += " -t upload"
-		if port != "" {
-			c += " --upload-port " + port
-		}
-	}
-	return c
 }
 
 func baseName(path string) string {
@@ -183,4 +190,18 @@ func short(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+func (o *Options) logEvent(event progress.Event) {
+	if o.Logf == nil {
+		return
+	}
+	switch event.Status {
+	case progress.StatusStarted, progress.StatusCompleted, progress.StatusSkipped, progress.StatusWarning, progress.StatusFailed:
+		if event.Detail != "" {
+			o.logf("%s: %s", event.Message, event.Detail)
+			return
+		}
+		o.logf("%s", event.Message)
+	}
 }
