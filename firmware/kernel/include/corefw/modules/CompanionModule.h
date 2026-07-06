@@ -402,7 +402,10 @@ class CompanionModule : public Module,
     state_.pushOffline(frame, len);
     unread_++;
     ui_.setUnread(unread_);
-    if (display) {
+    // Only surface the message on the device itself when no client app is
+    // attached — when a phone is connected (BLE/USB) it handles notifications,
+    // so the OLED preview and buzzer stay quiet, matching MeshCore.
+    if (display && !connected_) {
       ui_.addMessagePreview(path_len, who, text, host_ ? host_->rtcNow() : 0);
       beep(ui::melodies::kMessage);
     }

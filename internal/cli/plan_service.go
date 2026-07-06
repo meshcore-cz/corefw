@@ -23,6 +23,7 @@ type PlanResult struct {
 
 func defaultLoadPlan(ctx context.Context, opts PlanOptions) (*PlanResult, error) {
 	_ = ctx
+	opts.ProfilePath = resolveProfileArg(opts.ProfilePath)
 	p, err := profile.Load(opts.ProfilePath)
 	if err != nil {
 		return nil, err

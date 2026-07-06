@@ -135,6 +135,15 @@ static void testCompanionScreen() {
   check(preview.has("(D) Alice:"), "preview shows direct-message origin");
   check(preview.has("hello from the mesh"), "preview shows message text");
 
+  // A single button press dismisses the preview (Heltec V3 has one button):
+  // the first nextPage() swallows the press to hide the overlay rather than
+  // paging, so the home shell renders again instead of being stuck forever.
+  ui.nextPage();
+  FakeDisplay dismissed;
+  ui.render(dismissed, 4600, 111);
+  check(!dismissed.has("(D) Alice:"), "button dismisses stuck preview");
+  check(dismissed.has("MSG: 2"), "home shell returns after dismiss");
+
   // Disconnected state.
   FakeDisplay d2;
   CompanionUI ui2;

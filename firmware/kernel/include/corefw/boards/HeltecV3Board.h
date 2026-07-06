@@ -61,7 +61,7 @@ class HeltecV3Board : public Board {
 #endif
 #if defined(P_LORA_TX_LED)
     pinMode(P_LORA_TX_LED, OUTPUT);
-    digitalWrite(P_LORA_TX_LED, LOW);
+    digitalWrite(P_LORA_TX_LED, LOW);  // active-high: LOW = off (matches MeshCore)
 #endif
 #endif
   }

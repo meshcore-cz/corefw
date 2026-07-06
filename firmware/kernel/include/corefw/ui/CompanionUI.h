@@ -65,11 +65,15 @@ class CompanionUI {
 
   void nextPage() {
     show_splash_ = false;
+    // A visible message preview swallows the first press so a single-button
+    // board (e.g. Heltec V3) can dismiss it; the next press then navigates.
+    if (dismissPreview()) return;
     page_ = Page((uint8_t(page_) + 1) % uint8_t(Page::Count));
     dirty_ = true;
   }
   void prevPage() {
     show_splash_ = false;
+    if (dismissPreview()) return;
     page_ = Page((uint8_t(page_) + uint8_t(Page::Count) - 1) % uint8_t(Page::Count));
     dirty_ = true;
   }
@@ -116,6 +120,16 @@ class CompanionUI {
     preview_count_ = 0;
     showing_preview_ = false;
     dirty_ = true;
+  }
+
+  // Stop showing the preview overlay without discarding message history.
+  // Returns true if a preview was actually being shown (i.e. the press was
+  // consumed by dismissing it).
+  bool dismissPreview() {
+    if (!showing_preview_) return false;
+    showing_preview_ = false;
+    dirty_ = true;
+    return true;
   }
 
   // Render returns the preferred delay before the next refresh.

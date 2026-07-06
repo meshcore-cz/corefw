@@ -34,6 +34,7 @@ type Options struct {
 // Result summarizes a PlatformIO run.
 type Result struct {
 	RawLogPath string
+	UploadPort string
 }
 
 // Run invokes PlatformIO and parses its output into progress events.
@@ -113,15 +114,17 @@ func Run(opts Options) (*Result, error) {
 	wg.Wait()
 
 	if scanErr != nil && waitErr == nil {
-		return &Result{RawLogPath: logPath}, scanErr
+		return &Result{RawLogPath: logPath, UploadPort: parser.UploadPort()}, scanErr
 	}
 	if waitErr != nil {
 		reporter.Report(event(phase, progress.StatusFailed, progress.LevelError, "PlatformIO failed", logPath))
-		return &Result{RawLogPath: logPath}, fmt.Errorf("PlatformIO failed (see %s): %w", logPath, waitErr)
+		return &Result{RawLogPath: logPath, UploadPort: parser.UploadPort()}, fmt.Errorf("PlatformIO failed (see %s): %w", logPath, waitErr)
 	}
 
-	reporter.Report(event(phase, progress.StatusCompleted, progress.LevelInfo, "PlatformIO completed", logPath))
-	return &Result{RawLogPath: logPath}, nil
+	for _, event := range parser.Complete(opts.Upload, logPath) {
+		reporter.Report(event)
+	}
+	return &Result{RawLogPath: logPath, UploadPort: parser.UploadPort()}, nil
 }
 
 // Args returns the pio arguments for a build or upload.

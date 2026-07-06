@@ -198,8 +198,12 @@ func (m buildUIModel) render() string {
 	if m.done {
 		if m.buildErr != nil {
 			current = "Failed: " + m.buildErr.Error()
+		} else if m.current.Message != "" && m.current.Status == progress.StatusCompleted {
+			current = m.current.Message
+		} else if m.opts.Upload {
+			current = "Flashed firmware"
 		} else {
-			current = "Complete"
+			current = "Build complete"
 		}
 		fmt.Fprintf(&b, "\n%s\n", statusStyle(m.current.Status).Render(current))
 	} else {

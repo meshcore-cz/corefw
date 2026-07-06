@@ -23,6 +23,7 @@ type Parser struct {
 	linkStarted    bool
 	sizeStarted    bool
 	uploadStarted  bool
+	uploadPort     string
 }
 
 // NewParser returns a fresh PlatformIO output parser.
@@ -86,6 +87,13 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 		}
 	}
 
+	if strings.HasPrefix(line, "Auto-detected: ") {
+		p.uploadPort = strings.TrimSpace(strings.TrimPrefix(line, "Auto-detected: "))
+	}
+	if strings.HasPrefix(line, "Serial port ") {
+		p.uploadPort = strings.TrimSpace(strings.TrimPrefix(line, "Serial port "))
+	}
+
 	if match := sizeLineRE.FindStringSubmatch(line); match != nil {
 		pct, _ := strconv.ParseFloat(match[2], 64)
 		percent := pct / 100
@@ -107,6 +115,45 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 	}
 
 	return events
+}
+
+// Complete returns synthetic final events for phases that PlatformIO may not
+// explicitly close in its output.
+func (p *Parser) Complete(upload bool, logPath string) []progress.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	var events []progress.Event
+	if p.compileStarted || p.sizeStarted || p.uploadStarted {
+		events = append(events, p.event(progress.PhaseCompile, progress.StatusCompleted, progress.LevelInfo, "Compiled firmware", "", nil))
+	}
+	if p.linkStarted {
+		events = append(events, p.event(progress.PhaseLink, progress.StatusCompleted, progress.LevelInfo, "Linked firmware", "", nil))
+	} else if p.compileStarted || p.sizeStarted || p.uploadStarted {
+		events = append(events, p.event(progress.PhaseLink, progress.StatusSkipped, progress.LevelInfo, "Link step not needed", "", nil))
+	}
+	if p.sizeStarted {
+		events = append(events, p.event(progress.PhaseSize, progress.StatusCompleted, progress.LevelInfo, "Checked firmware size", "", nil))
+	}
+	if upload {
+		message := "Flashed firmware"
+		detail := logPath
+		if p.uploadPort != "" {
+			detail = p.uploadPort
+			if logPath != "" {
+				detail += " · " + logPath
+			}
+		}
+		events = append(events, p.event(progress.PhaseUpload, progress.StatusCompleted, progress.LevelInfo, message, detail, nil))
+	}
+	return events
+}
+
+// UploadPort returns the last upload port parsed from PlatformIO output.
+func (p *Parser) UploadPort() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.uploadPort
 }
 
 func (p *Parser) event(phase progress.Phase, status progress.Status, level progress.Level, message, detail string, prog *progress.Progress) progress.Event {

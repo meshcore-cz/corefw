@@ -37,6 +37,30 @@ func TestParserDetectsUploadProgress(t *testing.T) {
 	}
 }
 
+func TestParserCompleteClosesSkippedAndCompletedPhases(t *testing.T) {
+	parser := NewParser()
+
+	parser.ParseLine("stdout", "Building in release mode")
+	parser.ParseLine("stdout", "Checking size .pio/build/env/firmware.elf")
+	parser.ParseLine("stdout", "Flash: [==        ]  22.8% (used 760821 bytes from 3342336 bytes)")
+	parser.ParseLine("stdout", "Auto-detected: /dev/cu.usbserial-0001")
+	parser.ParseLine("stdout", "Uploading .pio/build/env/firmware.bin")
+
+	events := parser.Complete(true, "build/env/platformio.log")
+	assertContainsEvent(t, events, progress.PhaseCompile, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseLink, progress.StatusSkipped)
+	assertContainsEvent(t, events, progress.PhaseSize, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusCompleted)
+
+	last := events[len(events)-1]
+	if last.Message != "Flashed firmware" {
+		t.Fatalf("last message = %q, want flash result", last.Message)
+	}
+	if last.Detail != "/dev/cu.usbserial-0001 · build/env/platformio.log" {
+		t.Fatalf("last detail = %q", last.Detail)
+	}
+}
+
 func assertEvent(t *testing.T, events []progress.Event, phase progress.Phase, status progress.Status) {
 	t.Helper()
 	if len(events) == 0 {
@@ -45,4 +69,14 @@ func assertEvent(t *testing.T, events []progress.Event, phase progress.Phase, st
 	if events[0].Phase != phase || events[0].Status != status {
 		t.Fatalf("event = (%s, %s), want (%s, %s)", events[0].Phase, events[0].Status, phase, status)
 	}
+}
+
+func assertContainsEvent(t *testing.T, events []progress.Event, phase progress.Phase, status progress.Status) {
+	t.Helper()
+	for _, event := range events {
+		if event.Phase == phase && event.Status == status {
+			return
+		}
+	}
+	t.Fatalf("events did not contain (%s, %s): %+v", phase, status, events)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,6 +86,36 @@ func TestBuildReceivesFlags(t *testing.T) {
 	}
 	if got.ProfilePath != "profile.yaml" || got.OutDir != "build/custom" || got.FirmwareDir != "fw" || got.Compile {
 		t.Fatalf("unexpected build opts: %+v", got)
+	}
+}
+
+func TestBuildResolvesBuiltinProfileName(t *testing.T) {
+	var got build.Options
+	deps := testDeps()
+	deps.BuildRunner = BuildRunnerFunc(func(ctx context.Context, opts build.Options) (*build.Result, error) {
+		got = opts
+		return &build.Result{OutDir: "build/heltec-v3-repeater", Gen: &codegen.Result{EnvName: "env", Files: []string{"platformio.ini"}}}, nil
+	})
+	_, _, err := executeCommand(t, deps, "build", "heltec-v3-repeater", "--no-compile")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	want := filepath.Join(findProfilesDir(), "heltec-v3-repeater.yaml")
+	if got.ProfilePath != want {
+		t.Fatalf("profile path = %q", got.ProfilePath)
+	}
+}
+
+func TestResolveProfileArg(t *testing.T) {
+	want := filepath.Join(findProfilesDir(), "heltec-v3-repeater.yaml")
+	if got := resolveProfileArg("heltec-v3-repeater"); got != want {
+		t.Fatalf("resolveProfileArg = %q", got)
+	}
+	if got := resolveProfileArg("profiles/heltec-v3-repeater.yaml"); got != "profiles/heltec-v3-repeater.yaml" {
+		t.Fatalf("explicit path changed to %q", got)
+	}
+	if got := resolveProfileArg("does-not-exist"); got != "does-not-exist" {
+		t.Fatalf("missing profile changed to %q", got)
 	}
 }
 

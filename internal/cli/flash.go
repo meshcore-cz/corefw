@@ -27,9 +27,10 @@ func newFlashCommand(deps commandDeps) *cobra.Command {
   corefw flash profiles/wio-l1.yaml --monitor`,
 		ValidArgsFunction: profileCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			profilePath := resolveProfileArg(args[0])
 			res, err := runBuildCommand(cmd, deps, build.Options{
 				Context:     cmd.Context(),
-				ProfilePath: args[0],
+				ProfilePath: profilePath,
 				OutDir:      flags.outputDir,
 				FirmwareDir: flags.firmware,
 				Upload:      true,
@@ -39,6 +40,7 @@ func newFlashCommand(deps commandDeps) *cobra.Command {
 				return err
 			}
 			reportGenerated(cmd, res.OutDir, res.Gen.Files)
+			reportFlashResult(cmd, res)
 			reportPIOLog(cmd, res)
 			if flags.monitor {
 				if res.PIOLog == "" {
@@ -59,4 +61,17 @@ func newFlashCommand(deps commandDeps) *cobra.Command {
 	cmd.Flags().StringVar(&flags.port, "port", "", "upload/serial port (e.g. /dev/ttyUSB0); autodetected if omitted")
 	cmd.Flags().BoolVar(&flags.monitor, "monitor", false, "start PlatformIO monitor after a successful upload")
 	return cmd
+}
+
+func reportFlashResult(cmd *cobra.Command, res *build.Result) {
+	if res == nil {
+		return
+	}
+	if res.UploadPort != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "\nFlashed firmware to %s\n", res.UploadPort)
+		return
+	}
+	if res.PIOLog != "" {
+		fmt.Fprintln(cmd.OutOrStdout(), "\nFlashed firmware")
+	}
 }

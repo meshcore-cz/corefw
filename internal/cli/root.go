@@ -2,6 +2,9 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -111,7 +114,29 @@ func noArgs(cmd *cobra.Command, args []string) error {
 }
 
 func profileCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-	return []string{"yaml", "yml"}, cobra.ShellCompDirectiveFilterFileExt
+	return builtinProfileNames(toComplete), cobra.ShellCompDirectiveDefault
+}
+
+func builtinProfileNames(prefix string) []string {
+	entries, err := os.ReadDir(findProfilesDir())
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if ext != ".yaml" && ext != ".yml" {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ext)
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func outputError(cmd *cobra.Command, err error) error {

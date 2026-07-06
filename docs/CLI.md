@@ -8,6 +8,14 @@ $ corefw --help
 $ corefw --version
 ```
 
+Profile arguments may be explicit paths or built-in profile names. For example,
+these are equivalent when `profiles/heltec-v3-repeater.yaml` exists:
+
+```console
+$ corefw build profiles/heltec-v3-repeater.yaml
+$ corefw build heltec-v3-repeater
+```
+
 ## Global Flags
 
 These flags work before or after the command name:
@@ -48,6 +56,7 @@ Generate a PlatformIO project and compile it:
 
 ```console
 $ corefw build profiles/heltec-v3-repeater.yaml
+$ corefw build heltec-v3-repeater
 $ corefw build profiles/heltec-v3-repeater.yaml --out build/custom
 $ corefw build profiles/heltec-v3-repeater.yaml --firmware firmware
 ```
@@ -62,6 +71,7 @@ Flash a connected device:
 
 ```console
 $ corefw flash profiles/heltec-v3-repeater.yaml
+$ corefw flash heltec-v3-repeater
 $ corefw flash profiles/heltec-v3-repeater.yaml --port /dev/ttyUSB0
 $ corefw flash profiles/heltec-v3-repeater.yaml --monitor
 ```
@@ -200,4 +210,3 @@ These legacy commands are hidden from the main help output but still work:
 | `1` | Runtime, build, environment or validation failure. |
 | `2` | Invalid command usage or invalid flags. |
 | `130` | Interrupted by Ctrl+C where practical. |
-

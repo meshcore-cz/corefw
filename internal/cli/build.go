@@ -29,9 +29,10 @@ func newBuildCommand(deps commandDeps) *cobra.Command {
   corefw --plain build profiles/heltec-v3-repeater.yaml`,
 		ValidArgsFunction: profileCompletion,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			profilePath := resolveProfileArg(args[0])
 			res, err := runBuildCommand(cmd, deps, build.Options{
 				Context:     cmd.Context(),
-				ProfilePath: args[0],
+				ProfilePath: profilePath,
 				OutDir:      flags.outputDir,
 				FirmwareDir: flags.firmware,
 				Compile:     !flags.noCompile,

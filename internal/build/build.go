@@ -38,12 +38,13 @@ type Options struct {
 
 // Result summarises a completed build.
 type Result struct {
-	Plan     *resolve.Plan
-	Gen      *codegen.Result
-	Lockfile *lock.Lockfile
-	LockPath string
-	OutDir   string
-	PIOLog   string
+	Plan       *resolve.Plan
+	Gen        *codegen.Result
+	Lockfile   *lock.Lockfile
+	LockPath   string
+	OutDir     string
+	PIOLog     string
+	UploadPort string
 }
 
 func (o *Options) logf(format string, args ...any) {
@@ -164,6 +165,7 @@ func Run(opts Options) (*Result, error) {
 		}
 		if pioRes != nil {
 			res.PIOLog = pioRes.RawLogPath
+			res.UploadPort = pioRes.UploadPort
 		}
 		if err != nil {
 			return res, err
