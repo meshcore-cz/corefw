@@ -21,7 +21,8 @@ Usage:
   corefw <command> [flags]
 
 Commands:
-  build <profile.yaml>      Resolve, generate and (optionally) compile a firmware image
+  build <profile.yaml>      Resolve, generate and compile a firmware image
+  flash <profile.yaml>      Build and upload the firmware to a connected device
   validate <profile.yaml>   Validate a profile and its component graph without generating
   components                List available components (boards, modules, policies)
   boards                    List available board packages
@@ -41,6 +42,8 @@ func Main(args []string) int {
 	switch cmd {
 	case "build":
 		return cmdBuild(rest)
+	case "flash":
+		return cmdFlash(rest)
 	case "validate":
 		return cmdValidate(rest)
 	case "components":
@@ -65,8 +68,8 @@ func cmdBuild(args []string) int {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	out := fs.String("out", "", "output directory (default build/<name>)")
 	firmware := fs.String("firmware", "firmware", "path to the corefw C++ firmware tree")
-	compile := fs.Bool("compile", false, "run PlatformIO to produce the firmware binary")
-	if err := fs.Parse(args); err != nil {
+	noCompile := fs.Bool("no-compile", false, "generate the project but do not run PlatformIO")
+	if err := fs.Parse(reorderFlagsFirst(args)); err != nil {
 		return 2
 	}
 	if fs.NArg() != 1 {
@@ -77,20 +80,54 @@ func cmdBuild(args []string) int {
 		ProfilePath: fs.Arg(0),
 		OutDir:      *out,
 		FirmwareDir: *firmware,
-		Compile:     *compile,
+		Compile:     !*noCompile,
 		Logf:        logln,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
 		return 1
 	}
-	fmt.Printf("\nGenerated %s\n", res.OutDir)
-	for _, f := range res.Gen.Files {
+	reportGenerated(res.OutDir, res.Gen.Files)
+	if *noCompile {
+		fmt.Printf("\nBuild with: pio run -e %s -d %s\n", res.Gen.EnvName, res.OutDir)
+	}
+	return 0
+}
+
+func cmdFlash(args []string) int {
+	fs := flag.NewFlagSet("flash", flag.ContinueOnError)
+	out := fs.String("out", "", "output directory (default build/<name>)")
+	firmware := fs.String("firmware", "firmware", "path to the corefw C++ firmware tree")
+	port := fs.String("port", "", "upload/serial port (e.g. /dev/ttyUSB0); autodetected if omitted")
+	if err := fs.Parse(reorderFlagsFirst(args)); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "flash requires exactly one profile path")
+		return 2
+	}
+	res, err := build.Run(build.Options{
+		ProfilePath: fs.Arg(0),
+		OutDir:      *out,
+		FirmwareDir: *firmware,
+		Upload:      true,
+		Port:        *port,
+		Logf:        logln,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\nerror: %v\n", err)
+		return 1
+	}
+	reportGenerated(res.OutDir, res.Gen.Files)
+	return 0
+}
+
+func reportGenerated(outDir string, files []string) {
+	fmt.Printf("\nGenerated %s\n", outDir)
+	for _, f := range files {
 		fmt.Printf("  %s\n", f)
 	}
-	fmt.Printf("  %s\n", "corefw.lock")
-	fmt.Printf("\nBuild with: pio run -e %s -d %s\n", res.Gen.EnvName, res.OutDir)
-	return 0
+	fmt.Printf("  corefw.lock\n")
 }
 
 func cmdValidate(args []string) int {

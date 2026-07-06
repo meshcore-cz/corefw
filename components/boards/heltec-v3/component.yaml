@@ -22,7 +22,9 @@ board:
   framework: arduino
   platformio:
     board: esp32-s3-devkitc-1
-    base_env: esp32_base
+    platform: platformio/espressif32@6.11.0
+    framework: arduino
+    base_env: esp32
   capabilities:
     radio: true
     display: true

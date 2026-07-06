@@ -126,12 +126,15 @@ type BoardSpec struct {
 }
 
 // PlatformIOBoard captures the target-specific bits the generator needs to emit
-// a buildable env against the C++ kernel.
+// a self-contained, buildable env against the C++ kernel.
 type PlatformIOBoard struct {
-	Board    string `yaml:"board"`     // pio board id
-	BaseEnv  string `yaml:"base_env"`  // esp32_base / nrf52_base
-	LdScript string `yaml:"ldscript"`  // optional linker script
-	MaxSize  int    `yaml:"max_size"`  // optional upload size cap
+	Board           string   `yaml:"board"`            // pio board id
+	Platform        string   `yaml:"platform"`         // e.g. platformio/espressif32@6.11.0
+	Framework       string   `yaml:"framework"`        // arduino / espidf
+	PlatformPackages []string `yaml:"platform_packages"` // optional framework overrides
+	BaseEnv         string   `yaml:"base_env"`         // legacy grouping label (esp32/nrf52)
+	LdScript        string   `yaml:"ldscript"`         // optional linker script
+	MaxSize         int      `yaml:"max_size"`         // optional upload size cap
 }
 
 // BoardLimits records hard ceilings the resolver enforces.

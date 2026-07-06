@@ -24,6 +24,8 @@ type Options struct {
 	OutDir      string // default: build/<name>
 	FirmwareDir string // path to corefw C++ tree (default: ./firmware)
 	Compile     bool   // run `pio run` after generation
+	Upload      bool   // run `pio run -t upload` (flash) after generation
+	Port        string // optional upload port for flashing
 	Logf        func(format string, args ...any)
 }
 
@@ -105,24 +107,63 @@ func Run(opts Options) (*Result, error) {
 
 	res := &Result{Plan: plan, Gen: gen, Lockfile: lf, LockPath: lockPath, OutDir: outDir}
 
-	if opts.Compile {
-		opts.logf("Compiling firmware with PlatformIO")
-		if err := compile(outDir, gen.EnvName, opts.Logf); err != nil {
+	// PlatformIO isn't available in every environment (CI, containers without
+	// the toolchain). Rather than fail the whole build, degrade to generation
+	// and tell the user how to compile/flash by hand.
+	if opts.Compile || opts.Upload {
+		if _, err := exec.LookPath("pio"); err != nil {
+			opts.logf("PlatformIO (pio) not found in PATH — skipping %s.", verb(opts.Upload))
+			opts.logf("  Install it (https://platformio.org) then run: %s", manualCmd(outDir, gen.EnvName, opts.Upload, opts.Port))
+			return res, nil
+		}
+		opts.logf("%s firmware with PlatformIO", title(opts.Upload))
+		if err := runPIO(outDir, gen.EnvName, opts.Upload, opts.Port, opts.Logf); err != nil {
 			return res, err
 		}
 	}
 	return res, nil
 }
 
-func compile(outDir, env string, logf func(string, ...any)) error {
-	if _, err := exec.LookPath("pio"); err != nil {
-		return fmt.Errorf("pio (PlatformIO) not found in PATH; generated project is in %s", outDir)
+// runPIO invokes PlatformIO to build (or, when upload is true, build+flash) the
+// generated env in outDir.
+func runPIO(outDir, env string, upload bool, port string, logf func(string, ...any)) error {
+	args := []string{"run", "-e", env}
+	if upload {
+		args = append(args, "-t", "upload")
+		if port != "" {
+			args = append(args, "--upload-port", port)
+		}
 	}
-	cmd := exec.Command("pio", "run", "-e", env)
+	cmd := exec.Command("pio", args...)
 	cmd.Dir = outDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func verb(upload bool) string {
+	if upload {
+		return "flash"
+	}
+	return "compile"
+}
+
+func title(upload bool) string {
+	if upload {
+		return "Flashing"
+	}
+	return "Compiling"
+}
+
+func manualCmd(outDir, env string, upload bool, port string) string {
+	c := fmt.Sprintf("pio run -e %s -d %s", env, outDir)
+	if upload {
+		c += " -t upload"
+		if port != "" {
+			c += " --upload-port " + port
+		}
+	}
+	return c
 }
 
 func baseName(path string) string {

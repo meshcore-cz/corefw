@@ -22,8 +22,11 @@ board:
   framework: arduino
   platformio:
     board: seeed-wio-tracker-l1
-    base_env: nrf52_base
-    ldscript: boards/nrf52840_s140_v7.ld
+    platform: nordicnrf52
+    framework: arduino
+    base_env: nrf52
+    platform_packages:
+      - framework-arduinoadafruitnrf52 @ https://github.com/meshcore-dev/Adafruit_nRF52_Arduino#d541301
   capabilities:
     radio: true
     display: true

@@ -33,6 +33,7 @@ cpp-test: crypto-objs
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/Kernel.cpp firmware/kernel/kernel_test.cpp -o /tmp/corefw_ktest && /tmp/corefw_ktest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(CRYPTODIR) firmware/kernel/protocol/identity_test.cpp $(OBJDIR)/ed25519/*.o -o /tmp/corefw_idtest && /tmp/corefw_idtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) firmware/kernel/runtime/runtime_test.cpp $(OBJDIR)/sha256.o -o /tmp/corefw_rtest && /tmp/corefw_rtest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/companion/companion_test.cpp -o /tmp/corefw_ctest && /tmp/corefw_ctest
 
 # Compile the vendored orlp/ed25519 and SHA-256 sources as C into build/obj.
 crypto-objs:
@@ -42,8 +43,8 @@ crypto-objs:
 
 # Syntax-check the generated composition roots against the kernel headers.
 verify-gen: build
-	./$(BIN) build profiles/heltec-v3-repeater.yaml >/dev/null
-	./$(BIN) build profiles/wio-tracker-l1-companion.yaml >/dev/null
+	./$(BIN) build profiles/heltec-v3-repeater.yaml --no-compile >/dev/null
+	./$(BIN) build profiles/wio-tracker-l1-companion.yaml --no-compile >/dev/null
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(INCLUDE) build/heltec-v3-repeater/src/corefw_main.generated.cpp
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(INCLUDE) build/wio-tracker-l1-companion/src/corefw_main.generated.cpp
 	@echo "generated composition roots compile"
