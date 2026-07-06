@@ -9,6 +9,7 @@
 #if defined(COREFW_TARGET)
 #include <Arduino.h>
 #include <Wire.h>
+#include <drivers/radio/sx1262/SX1262Driver.h>
 #endif
 
 namespace corefw {
@@ -48,11 +49,19 @@ class WioTrackerL1Board : public Board {
     delay(10);
 #endif
   }
-  RadioDriver* radio() override { return radio_; }
+  RadioDriver* radio() override {
+#if defined(COREFW_TARGET)
+    return &radio_;
+#else
+    return nullptr;
+#endif
+  }
   void reboot() override { /* NVIC_SystemReset() on target */ }
 
  private:
-  RadioDriver* radio_ = nullptr;
+#if defined(COREFW_TARGET)
+  SX1262Driver radio_;
+#endif
 };
 
 }  // namespace corefw

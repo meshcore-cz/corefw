@@ -29,6 +29,11 @@ class Dispatcher : public MeshService {
 
   void setDuty(float fraction) { duty_.setDuty(fraction); }
 
+  void configureRadio(const RadioConfig& cfg) {
+    cfg_ = cfg;
+    if (radio_) radio_->configure(cfg_);
+  }
+
   // --- MeshService --------------------------------------------------------
   void send(const proto::Packet& pkt) override {
     // Record our own packet so its echoes are suppressed, then queue it.

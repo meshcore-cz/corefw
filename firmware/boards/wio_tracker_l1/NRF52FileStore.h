@@ -16,7 +16,7 @@
 #include <InternalFileSystem.h>
 #include <cstring>
 
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
 #include "NRF52QSPIFileSystem.h"
 #endif
 
@@ -26,7 +26,7 @@ class NRF52FileStore : public companion::FileStore {
  public:
   void begin() {
     InternalFS.begin();
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
     qspi_mounted_ = qspi_.begin();
 #endif
     migrateToMeshCoreLayout();
@@ -58,7 +58,7 @@ class NRF52FileStore : public companion::FileStore {
   uint32_t usedKb() override { return usedKb(fsFor(companion::CONTACTS_FILE)); }
 
   uint32_t totalKb() override {
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
     if (qspi_mounted_) return qspi_.totalKb();
 #endif
     return totalKb(InternalFS);
@@ -73,7 +73,7 @@ class NRF52FileStore : public companion::FileStore {
   }
 
   Adafruit_LittleFS& fsFor(const char* path) {
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
     if (qspi_mounted_ && secondaryPath(path)) return qspi_;
 #endif
     return InternalFS;
@@ -127,7 +127,7 @@ class NRF52FileStore : public companion::FileStore {
       }
     }
 
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
     if (!qspi_mounted_) return;
     moveIfMissing(InternalFS, qspi_, companion::ADV_BLOBS_FILE);
     moveIfMissing(InternalFS, qspi_, companion::CONTACTS_FILE);
@@ -172,7 +172,7 @@ class NRF52FileStore : public companion::FileStore {
     return (cfg->block_count * cfg->block_size) / 1024;
   }
 
-#if defined(QSPIFLASH)
+#if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
   NRF52QSPIFileSystem qspi_;
   bool qspi_mounted_ = false;
 #endif

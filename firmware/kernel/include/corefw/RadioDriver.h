@@ -20,7 +20,7 @@ struct RadioConfig {
   uint8_t spreading_factor = 11;
   uint8_t coding_rate = 5;
   int8_t tx_power_dbm = 22;
-  uint16_t preamble_len = 8;
+  uint16_t preamble_len = 16;
   uint8_t sync_word = 0x12;
 };
 

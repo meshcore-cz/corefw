@@ -74,6 +74,35 @@ static board::NRF52FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
 static companion::CompanionTransport* g_transport = nullptr;
+static bool g_radio_ok = false;
+
+static void applyProfileRadioDefaults(companion::CompanionState& state) {
+#ifdef LORA_FREQ
+  state.freq_khz = uint32_t(float(LORA_FREQ) * 1000.0f + 0.5f);
+#endif
+#ifdef LORA_BW
+  state.bw_hz = uint32_t(float(LORA_BW) * 1000.0f + 0.5f);
+#endif
+#ifdef LORA_SF
+  state.sf = LORA_SF;
+#endif
+#ifdef LORA_CR
+  state.cr = LORA_CR;
+#endif
+#ifdef LORA_TX_POWER
+  state.tx_power_dbm = LORA_TX_POWER;
+#endif
+}
+
+static RadioConfig makeRadioConfig(const companion::CompanionState& state) {
+  RadioConfig cfg;
+  cfg.frequency_mhz = float(state.freq_khz) / 1000.0f;
+  cfg.bandwidth_khz = float(state.bw_hz) / 1000.0f;
+  cfg.spreading_factor = state.sf;
+  cfg.coding_rate = state.cr;
+  cfg.tx_power_dbm = state.tx_power_dbm;
+  return cfg;
+}
 
 // CompanionHost implementation: device services (RTC, battery, persistence).
 // Persistence flows through the byte-compatible PersistentStore, so writes land
@@ -93,6 +122,20 @@ class WioCompanionHost : public companion::CompanionHost {
   void savePrefs() override { if (g_companion) g_store.savePrefs(g_companion->state()); }
   void saveContacts() override { if (g_companion) g_store.saveContacts(g_companion->state()); }
   void saveChannels() override { if (g_companion) g_store.saveChannels(g_companion->state()); }
+  void applyRadioParams() override {
+    if (!g_companion || !g_dispatcher) return;
+    g_dispatcher->configureRadio(makeRadioConfig(g_companion->state()));
+  }
+  void applyTxPower() override { applyRadioParams(); }
+  void radioStats(int16_t& noise_floor, int8_t& last_rssi, int8_t& last_snr_q4,
+                  uint32_t& tx_air_s, uint32_t& rx_air_s) override {
+    noise_floor = g_radio_ok ? -120 : 0;
+    RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
+    last_rssi = radio ? int8_t(radio->lastRSSI()) : 0;
+    last_snr_q4 = radio ? int8_t(radio->lastSNR() * 4.0f) : 0;
+    tx_air_s = 0;
+    rx_air_s = 0;
+  }
   bool factoryReset() override {
     // Only an explicit CMD_FACTORY_RESET erases stored data.
     g_fs.remove(companion::PREFS_FILE);
@@ -262,6 +305,7 @@ void setup() {
   showStage("startup", "storage");
   g_fs.begin();
   if (g_companion) {
+    applyProfileRadioDefaults(g_companion->state());
     uint8_t seed[proto::SEED_SIZE];
     for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(random(256));
     g_store.loadAll(g_companion->state(), seed);
@@ -271,11 +315,13 @@ void setup() {
   // 3. Build the radio scheduler around the board's configured radio.
   showStage("startup", "radio");
   RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
-  RadioConfig cfg;
-  cfg.tx_power_dbm = g_companion ? g_companion->state().tx_power_dbm : 22;
+  RadioConfig cfg = g_companion ? makeRadioConfig(g_companion->state()) : RadioConfig{};
   static Dispatcher dispatcher(radio, &g_clock, g_identity.pub_key, cfg);
   g_dispatcher = &dispatcher;
-  if (radio) radio->begin(cfg);
+  if (radio) {
+    g_radio_ok = radio->begin(cfg);
+    if (!g_radio_ok) showStage("radio init", "failed");
+  }
   // Deliver received packets to the companion, which decrypts those addressed
   // to this node and surfaces messages/adverts to the app.
   if (g_companion) dispatcher.subscribe(g_companion);
