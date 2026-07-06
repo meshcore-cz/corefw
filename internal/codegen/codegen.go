@@ -67,7 +67,15 @@ func Generate(plan *resolve.Plan, opts Options) (*Result, error) {
 
 	res := &Result{OutDir: opts.OutDir, Merged: merged, EnvName: env, Registrations: regs}
 
-	pio, err := renderPlatformIO(plan, merged, env, opts.FirmwareDir)
+	// Copy any component-owned C++ sources into the project. This is what lets a
+	// component be self-encapsulated in a single directory (built-in or fetched
+	// from git) rather than splitting its manifest from its C++.
+	compIncludes, err := copyComponentSources(plan, opts.OutDir, res)
+	if err != nil {
+		return nil, err
+	}
+
+	pio, err := renderPlatformIO(plan, merged, env, opts.FirmwareDir, compIncludes)
 	if err != nil {
 		return nil, err
 	}
@@ -90,6 +98,47 @@ func Generate(plan *resolve.Plan, opts Options) (*Result, error) {
 		return nil, err
 	}
 	return res, nil
+}
+
+// copyComponentSources materializes every selected component's own C++ sources
+// (Manifest.Codegen.Sources) into the generated project under
+// components/<id>/, and returns the project-relative include dirs to add. Files
+// are read through Component.ReadFile, which works uniformly whether the
+// component is embedded (built-in), a local path, or fetched from git — so a
+// self-encapsulated component needs no special-casing per origin.
+func copyComponentSources(plan *resolve.Plan, outDir string, res *Result) ([]string, error) {
+	var includes []string
+	seen := map[string]bool{}
+	copyOne := func(sel *resolve.Selected) error {
+		srcs := sel.Component.Manifest.Codegen.Sources
+		if len(srcs) == 0 || seen[sel.ID()] {
+			return nil
+		}
+		seen[sel.ID()] = true
+		destDir := filepath.Join("components", slug(sel.ID()))
+		for _, rel := range srcs {
+			data, err := sel.Component.ReadFile(rel)
+			if err != nil {
+				return fmt.Errorf("component %s: reading source %s: %w", sel.ID(), rel, err)
+			}
+			if err := write(outDir, filepath.Join(destDir, rel), string(data), res); err != nil {
+				return err
+			}
+		}
+		includes = append(includes, destDir)
+		return nil
+	}
+	sels := append([]*resolve.Selected{plan.Board}, plan.Modules...)
+	sels = append(sels, plan.Policies...)
+	for _, sel := range sels {
+		if sel == nil {
+			continue
+		}
+		if err := copyOne(sel); err != nil {
+			return nil, err
+		}
+	}
+	return includes, nil
 }
 
 func copyBoardSupport(plan *resolve.Plan, outDir string, res *Result) error {
@@ -222,7 +271,7 @@ lib_deps =
 {{- end}}
 `))
 
-func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir string) (string, error) {
+func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir string, compIncludes []string) (string, error) {
 	board := plan.Board.Component.Manifest.Board
 	defines := append([]string{}, corefwBaseDefines...)
 	// Emit the platform family define the target code guards on
@@ -263,6 +312,9 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 			includes = append(includes, filepath.Join(firmwareDir, inc))
 		}
 	}
+	// Self-encapsulated components' own directories, copied into the project by
+	// copyComponentSources. Project-relative so they resolve from build/<name>/.
+	includes = append(includes, compIncludes...)
 	// The Arduino variant dir (if any) is project-relative so PlatformIO finds
 	// variant.h during the core build.
 	srcFilter := []string{"+<*.cpp>"}

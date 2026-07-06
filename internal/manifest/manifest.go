@@ -86,6 +86,12 @@ type Codegen struct {
 	// Setters maps an option key to a C++ setter method. The validated option
 	// value is passed as the argument (quoted for strings).
 	Setters map[string]string `yaml:"setters"`
+	// Sources are C++ files the component ships *inside its own directory*
+	// (paths relative to the component). They are copied into the generated
+	// project and the component's directory is added to the include path, so a
+	// component — built-in or fetched from git — is fully self-encapsulated in
+	// one directory. Header is then given relative to that directory.
+	Sources []string `yaml:"sources"`
 }
 
 // Compatibility holds version constraints against the platform and its APIs.

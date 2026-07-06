@@ -17,7 +17,8 @@ it did three things:
 
 Because the wire format and the hook already exist in the platform, the whole
 feature is ~15 lines of header plus a manifest. Nothing in the kernel or the
-repeater/companion modules is touched.
+repeater/companion modules is touched, and everything — manifest, schema, C++,
+this README — lives in **this one directory**, so it is git-linkable as-is.
 
 ## Usage
 

@@ -38,11 +38,16 @@ resources:
   flash: 256
   ram_static: 8
 
-# Header-only; the kernel library compiles it once its header is referenced by
-# the generated composition root. Nothing to add to the src filter.
+# Fully self-encapsulated: the C++ lives right here in the component directory.
+# `sources` lists the files to copy into the generated project; `header` is then
+# given relative to that directory. Because it is copied via the component's own
+# filesystem, the identical directory works whether it is built-in, a local
+# path, or fetched from git — no fork, no files scattered across the tree.
 codegen:
   class: CzAdvertFeatures
-  header: corefw/extensions/CzAdvertFeatures.h
+  header: CzAdvertFeatures.h
+  sources:
+    - CzAdvertFeatures.h
   var: cz_advert_features
   register: registerModule
   setters:

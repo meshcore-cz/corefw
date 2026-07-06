@@ -8,8 +8,12 @@
 //   c++ -std=c++17 -I firmware/kernel/include \
 //       tests/cpp/extension_test.cpp -o /tmp/exttest && /tmp/exttest
 #include <corefw/Kernel.h>
-#include <corefw/extensions/CzAdvertFeatures.h>
 #include <corefw/protocol/AdvertData.h>
+
+// The extension is self-encapsulated in its component directory; the build adds
+// that directory to the include path (see codegen copyComponentSources). The
+// test does the same via -I components/extensions/cz-advert-features.
+#include <CzAdvertFeatures.h>
 
 #include <cstdio>
 #include <cstdlib>

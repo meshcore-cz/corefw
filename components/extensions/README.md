@@ -21,18 +21,23 @@ adding one never breaks existing components.
 
 ## Anatomy
 
-Identical to any component (see [`docs/adding-a-component.md`](../../docs/adding-a-component.md)):
+Identical to any component (see [`docs/adding-a-component.md`](../../docs/adding-a-component.md)) —
+and **fully self-encapsulated in one directory**:
 
 ```
 cz-advert-features/
-├── component.yaml     # id, type: module, codegen (setters + register)
-└── schema.yaml        # option types/ranges/defaults
+├── component.yaml       # id, type: module, codegen (header + sources + setters)
+├── schema.yaml          # option types/ranges/defaults
+├── CzAdvertFeatures.h   # the C++ — lives right here, not in firmware/
+└── README.md
 ```
 
-The C++ is header-only and lives under the kernel include tree
-(`firmware/kernel/include/corefw/extensions/`), so it compiles into the firmware
-library the moment the generated composition root includes it — nothing to add
-to the source filter.
+The C++ lives in the component directory. `codegen.sources` lists the files to
+copy into the generated project, and `codegen.header` is given relative to that
+directory. The copy goes through the component's own filesystem, so the exact
+same directory works whether it is built-in, a local path, or fetched from git.
+That is what makes an extension a single, git-linkable unit with no files
+scattered across the platform tree.
 
 ## Using one
 
