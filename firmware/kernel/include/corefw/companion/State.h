@@ -15,11 +15,25 @@
 #include <cstdint>
 #include <cstring>
 
+// Table sizes. The generated build may override these with -D MAX_CONTACTS=...
+// (the companion module exposes them as options), so honour any such macro and
+// fall back to sensible defaults otherwise. The namespaced kMax* constants below
+// are what the code uses — a bare MAX_CONTACTS may be a preprocessor macro.
+#ifndef MAX_CONTACTS
+#define MAX_CONTACTS 100
+#endif
+#ifndef MAX_GROUP_CHANNELS
+#define MAX_GROUP_CHANNELS 40
+#endif
+#ifndef OFFLINE_QUEUE_SIZE
+#define OFFLINE_QUEUE_SIZE 64
+#endif
+
 namespace corefw::companion {
 
-inline constexpr int MAX_CONTACTS = 100;
-inline constexpr int MAX_GROUP_CHANNELS = 40;
-inline constexpr int OFFLINE_QUEUE_SIZE = 64;
+inline constexpr int kMaxContacts = MAX_CONTACTS;
+inline constexpr int kMaxGroupChannels = MAX_GROUP_CHANNELS;
+inline constexpr int kOfflineQueueSize = OFFLINE_QUEUE_SIZE;
 inline constexpr uint32_t MAX_SIGN_DATA_LEN = 8 * 1024;
 
 // Advert node type reported in SELF_INFO (a companion identifies as CHAT).
@@ -70,8 +84,8 @@ struct CompanionState {
   uint8_t manual_add_contacts = 0;
   uint8_t client_repeat = 0;
   uint8_t path_hash_mode = 0;
-  uint8_t max_contacts = MAX_CONTACTS;
-  uint8_t max_group_channels = MAX_GROUP_CHANNELS;
+  uint16_t max_contacts = kMaxContacts;   // DEVICE_INFO reports max_contacts/2
+  uint8_t max_group_channels = kMaxGroupChannels;
   uint32_t rx_delay_base_ms = 0;      // tuning: rx_delay_base * 1000
   uint32_t airtime_factor_ms = 0;     // tuning: airtime_factor * 1000
   uint8_t autoadd_config = 0;
@@ -83,11 +97,11 @@ struct CompanionState {
   uint8_t send_scope_key[16] = {};
 
   // --- Stores -------------------------------------------------------------
-  ContactInfo contacts[MAX_CONTACTS];
+  ContactInfo contacts[kMaxContacts];
   int num_contacts = 0;
-  ChannelDetails channels[MAX_GROUP_CHANNELS];
-  bool channel_used[MAX_GROUP_CHANNELS] = {};
-  OfflineMessage offline_queue[OFFLINE_QUEUE_SIZE];
+  ChannelDetails channels[kMaxGroupChannels];
+  bool channel_used[kMaxGroupChannels] = {};
+  OfflineMessage offline_queue[kOfflineQueueSize];
   int offline_queue_len = 0;
 
   const uint8_t* selfPub() const { return self.pub_key; }
@@ -100,7 +114,7 @@ struct CompanionState {
     return nullptr;
   }
   bool addContact(const ContactInfo& c) {
-    if (num_contacts >= MAX_CONTACTS) return false;
+    if (num_contacts >= kMaxContacts) return false;
     contacts[num_contacts++] = c;
     return true;
   }
@@ -117,12 +131,12 @@ struct CompanionState {
 
   // --- Channel table ------------------------------------------------------
   bool getChannel(uint8_t idx, ChannelDetails& out) const {
-    if (idx >= MAX_GROUP_CHANNELS || !channel_used[idx]) return false;
+    if (idx >= kMaxGroupChannels || !channel_used[idx]) return false;
     out = channels[idx];
     return true;
   }
   bool setChannel(uint8_t idx, const ChannelDetails& ch) {
-    if (idx >= MAX_GROUP_CHANNELS) return false;
+    if (idx >= kMaxGroupChannels) return false;
     channels[idx] = ch;
     channel_used[idx] = true;
     return true;
@@ -130,9 +144,9 @@ struct CompanionState {
 
   // --- Offline queue ------------------------------------------------------
   void pushOffline(const uint8_t* frame, int len) {
-    if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {  // drop oldest
-      for (int i = 0; i < OFFLINE_QUEUE_SIZE - 1; i++) offline_queue[i] = offline_queue[i + 1];
-      offline_queue_len = OFFLINE_QUEUE_SIZE - 1;
+    if (offline_queue_len >= kOfflineQueueSize) {  // drop oldest
+      for (int i = 0; i < kOfflineQueueSize - 1; i++) offline_queue[i] = offline_queue[i + 1];
+      offline_queue_len = kOfflineQueueSize - 1;
     }
     OfflineMessage& m = offline_queue[offline_queue_len++];
     m.len = len > MAX_FRAME_SIZE ? MAX_FRAME_SIZE : len;

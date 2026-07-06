@@ -54,8 +54,9 @@ func renderEntrypoint(plan *resolve.Plan, regs []Registration) (string, error) {
 		"\nusing namespace corefw;\n\n" +
 		decls.String() +
 		"\n// corefw_compose is called once by the kernel at startup, before the radio is\n" +
-		"// brought up. It must not block or transmit.\n" +
-		"void corefw_compose(Kernel& kernel) {" +
+		"// brought up. It must not block or transmit. (Qualified so it defines the\n" +
+		"// declaration in namespace corefw, not a global overload.)\n" +
+		"void corefw::corefw_compose(Kernel& kernel) {" +
 		body.String() +
 		"}\n"
 	return out, nil

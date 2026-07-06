@@ -13,12 +13,14 @@
       "+<kernel/Kernel.cpp>",
       "+<drivers/crypto/ed25519/*.c>",
       "+<drivers/crypto/sha256/*.c>",
+      "+<drivers/crypto/aes/*.c>",
       "+<boards/*/*.cpp>",
       "+<modules/*/*.cpp>"
     ],
     "flags": [
       "-I drivers/crypto/ed25519",
-      "-I drivers/crypto/sha256"
+      "-I drivers/crypto/sha256",
+      "-I drivers/crypto/aes"
     ]
   }
 }

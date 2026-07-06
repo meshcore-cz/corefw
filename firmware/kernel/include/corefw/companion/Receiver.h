@@ -85,7 +85,7 @@ class MessageReceiver {
     if (pkt.payload_len < 1 + proto::CIPHER_MAC_SIZE) return false;
     uint8_t ch_hash = pkt.payload[0];
     uint8_t plain[proto::MAX_PACKET_PAYLOAD];
-    for (int idx = 0; idx < MAX_GROUP_CHANNELS; idx++) {
+    for (int idx = 0; idx < kMaxGroupChannels; idx++) {
       if (!s_.channel_used[idx]) continue;
       if (s_.channels[idx].channel.hash[0] != ch_hash) continue;
       int n = proto::MACThenDecrypt(s_.channels[idx].channel.secret, plain, &pkt.payload[1],

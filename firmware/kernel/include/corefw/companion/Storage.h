@@ -79,10 +79,10 @@ class PersistentStore {
   // Loads all /contacts3 records into the state's contact table (skipping
   // transient entries the reference never persists is the writer's job).
   bool loadContacts(CompanionState& s) {
-    uint8_t buf[MAX_CONTACTS * CONTACT_RECORD_SIZE];
+    uint8_t buf[kMaxContacts * CONTACT_RECORD_SIZE];
     size_t n = fs_.read(CONTACTS_FILE, buf, sizeof(buf));
     s.num_contacts = 0;
-    for (size_t off = 0; off + CONTACT_RECORD_SIZE <= n && s.num_contacts < MAX_CONTACTS;
+    for (size_t off = 0; off + CONTACT_RECORD_SIZE <= n && s.num_contacts < kMaxContacts;
          off += CONTACT_RECORD_SIZE) {
       decodeContact(&buf[off], s.contacts[s.num_contacts]);
       s.num_contacts++;
@@ -90,7 +90,7 @@ class PersistentStore {
     return n > 0;
   }
   bool saveContacts(const CompanionState& s) {
-    uint8_t buf[MAX_CONTACTS * CONTACT_RECORD_SIZE];
+    uint8_t buf[kMaxContacts * CONTACT_RECORD_SIZE];
     size_t off = 0;
     for (int i = 0; i < s.num_contacts; i++) {
       if (s.contacts[i].type == ADV_TYPE_NONE) continue;  // don't persist anon entries
@@ -102,10 +102,10 @@ class PersistentStore {
 
   // --- Channels -----------------------------------------------------------
   bool loadChannels(CompanionState& s) {
-    uint8_t buf[MAX_GROUP_CHANNELS * CHANNEL_RECORD_SIZE];
+    uint8_t buf[kMaxGroupChannels * CHANNEL_RECORD_SIZE];
     size_t n = fs_.read(CHANNELS_FILE, buf, sizeof(buf));
     int idx = 0;
-    for (size_t off = 0; off + CHANNEL_RECORD_SIZE <= n && idx < MAX_GROUP_CHANNELS;
+    for (size_t off = 0; off + CHANNEL_RECORD_SIZE <= n && idx < kMaxGroupChannels;
          off += CHANNEL_RECORD_SIZE) {
       decodeChannel(&buf[off], s.channels[idx]);
       s.channel_used[idx] = true;
@@ -114,11 +114,11 @@ class PersistentStore {
     return n > 0;
   }
   bool saveChannels(const CompanionState& s) {
-    uint8_t buf[MAX_GROUP_CHANNELS * CHANNEL_RECORD_SIZE];
+    uint8_t buf[kMaxGroupChannels * CHANNEL_RECORD_SIZE];
     size_t off = 0;
     // Persist the contiguous run of used channels (matches the reference, which
     // stops at the first unused index).
-    for (int i = 0; i < MAX_GROUP_CHANNELS && s.channel_used[i]; i++) {
+    for (int i = 0; i < kMaxGroupChannels && s.channel_used[i]; i++) {
       encodeChannel(s.channels[i], &buf[off]);
       off += CHANNEL_RECORD_SIZE;
     }

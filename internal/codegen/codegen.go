@@ -201,7 +201,11 @@ board_build.ldscript = {{.LdScript}}
 {{- if .MaxSize}}
 board_upload.maximum_size = {{.MaxSize}}
 {{- end}}
+; The corefw kernel headers use C++17 (inline constexpr); several Arduino cores
+; default to gnu++11, so force the standard here.
+build_unflags = -std=gnu++11 -std=gnu++14
 build_flags =
+  -std=gnu++17
 {{- range .Defines}}
   {{.}}
 {{- end}}
