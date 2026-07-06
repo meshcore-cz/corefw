@@ -82,7 +82,42 @@ func Generate(plan *resolve.Plan, opts Options) (*Result, error) {
 	if err := write(opts.OutDir, filepath.Join("src", "corefw_main.generated.cpp"), main, res); err != nil {
 		return nil, err
 	}
+
+	// Copy any board-support files (custom board JSON, linker scripts) the board
+	// ships into the project's boards/ directory, where PlatformIO looks for
+	// custom board definitions.
+	if err := copyBoardSupport(plan, opts.OutDir, res); err != nil {
+		return nil, err
+	}
 	return res, nil
+}
+
+func copyBoardSupport(plan *resolve.Plan, outDir string, res *Result) error {
+	board := plan.Board.Component.Manifest.Board
+	if board == nil {
+		return nil
+	}
+	for _, rel := range board.PlatformIO.SupportFiles {
+		data, err := plan.Board.Component.ReadFile(rel)
+		if err != nil {
+			return fmt.Errorf("board %s: reading support file %s: %w", plan.Board.ID(), rel, err)
+		}
+		dest := filepath.Join("boards", filepath.Base(rel))
+		if err := write(outDir, dest, string(data), res); err != nil {
+			return err
+		}
+	}
+	for _, rel := range board.PlatformIO.VariantFiles {
+		data, err := plan.Board.Component.ReadFile(rel)
+		if err != nil {
+			return fmt.Errorf("board %s: reading variant file %s: %w", plan.Board.ID(), rel, err)
+		}
+		dest := filepath.Join("variant", filepath.Base(rel))
+		if err := write(outDir, dest, string(data), res); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func registrations(plan *resolve.Plan) []Registration {
@@ -135,6 +170,7 @@ var corefwBaseDefines = []string{
 	"-D RADIOLIB_EXCLUDE_HELLSCHREIBER=1",
 	"-D RADIOLIB_EXCLUDE_MORSE=1",
 	"-D RADIOLIB_EXCLUDE_APRS=1",
+	"-D RADIOLIB_EXCLUDE_BELL=1",
 	"-D RADIOLIB_EXCLUDE_RTTY=1",
 	"-D RADIOLIB_EXCLUDE_SSTV=1",
 }
@@ -165,7 +201,6 @@ board_build.ldscript = {{.LdScript}}
 {{- if .MaxSize}}
 board_upload.maximum_size = {{.MaxSize}}
 {{- end}}
-lib_extra_dirs = {{.FirmwareDir}}
 build_flags =
 {{- range .Defines}}
   {{.}}
@@ -186,6 +221,14 @@ lib_deps =
 func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir string) (string, error) {
 	board := plan.Board.Component.Manifest.Board
 	defines := append([]string{}, corefwBaseDefines...)
+	// Emit the platform family define the target code guards on
+	// (COREFW_TARGET && NRF52_PLATFORM, etc.).
+	switch board.PlatformIO.BaseEnv {
+	case "nrf52":
+		defines = append(defines, "-D NRF52_PLATFORM=1")
+	case "esp32":
+		defines = append(defines, "-D ESP32_PLATFORM=1")
+	}
 	for _, k := range mb.sortedDefines() {
 		v := mb.Defines[k]
 		if v == "" {
@@ -195,6 +238,30 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 		}
 	}
 	libDeps := append(append([]string{}, corefwBaseLibs...), mb.LibDeps...)
+
+	// Include paths: the kernel public headers (<corefw/...>) and the firmware
+	// root (<drivers/...>, <boards/...>), then any board-specific include dirs.
+	// All are rooted at the firmware tree so they resolve from build/<name>/.
+	includes := []string{
+		filepath.Join(firmwareDir, "kernel", "include"),
+		firmwareDir,
+		filepath.Join(firmwareDir, "drivers", "crypto", "ed25519"),
+		filepath.Join(firmwareDir, "drivers", "crypto", "sha256"),
+	}
+	for _, inc := range mb.Includes {
+		if filepath.IsAbs(inc) {
+			includes = append(includes, inc)
+		} else {
+			includes = append(includes, filepath.Join(firmwareDir, inc))
+		}
+	}
+	// The Arduino variant dir (if any) is project-relative so PlatformIO finds
+	// variant.h during the core build.
+	srcFilter := []string{"+<*.cpp>"}
+	if len(board.PlatformIO.VariantFiles) > 0 {
+		includes = append(includes, "variant")
+		srcFilter = append(srcFilter, "+<../variant/variant.cpp>")
+	}
 	data := struct {
 		Name, Board, Env, Platform, Framework, PioBoard, LdScript, FirmwareDir string
 		PlatformPackages                                                       []string
@@ -212,9 +279,13 @@ func renderPlatformIO(plan *resolve.Plan, mb MergedBuild, env, firmwareDir strin
 		MaxSize:          board.PlatformIO.MaxSize,
 		FirmwareDir:      firmwareDir,
 		Defines:          defines,
-		Includes:         mb.Includes,
-		SrcFilter:        mb.SrcFilter,
-		LibDeps:          libDeps,
+		Includes:         includes,
+		// The env compiles the generated composition root (and the Arduino
+		// variant, if the board ships one); the corefw kernel, drivers, boards
+		// and modules build themselves as a library (firmware/library.json)
+		// once their headers are referenced.
+		SrcFilter: srcFilter,
+		LibDeps:   libDeps,
 	}
 	var buf bytes.Buffer
 	if err := pioTemplate.Execute(&buf, data); err != nil {

@@ -1,15 +1,24 @@
 {
   "name": "corefw-kernel",
   "version": "0.1.0",
-  "description": "The corefw MeshCore firmware kernel: protocol runtime, radio scheduling, crypto identity, event system and central power coordination. Wire-compatible with MeshCore Core Protocol V1.",
+  "description": "The corefw MeshCore firmware kernel: protocol runtime, radio scheduling, crypto identity, event system, companion protocol and central power coordination. Wire-compatible with MeshCore Core Protocol V1.",
   "keywords": ["meshcore", "lora", "mesh", "corefw"],
   "license": "MIT",
   "frameworks": ["arduino", "espidf"],
   "platforms": ["espressif32", "nordicnrf52"],
-  "export": {
-    "include": ["kernel", "drivers", "boards", "modules", "policies"]
-  },
   "build": {
-    "includeDir": "kernel/include"
+    "includeDir": "kernel/include",
+    "srcDir": ".",
+    "srcFilter": [
+      "+<kernel/Kernel.cpp>",
+      "+<drivers/crypto/ed25519/*.c>",
+      "+<drivers/crypto/sha256/*.c>",
+      "+<boards/*/*.cpp>",
+      "+<modules/*/*.cpp>"
+    ],
+    "flags": [
+      "-I drivers/crypto/ed25519",
+      "-I drivers/crypto/sha256"
+    ]
   }
 }

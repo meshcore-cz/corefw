@@ -25,6 +25,13 @@ board:
     platform: nordicnrf52
     framework: arduino
     base_env: nrf52
+    ldscript: boards/nrf52840_s140_v7.ld
+    support_files:
+      - pio-board/seeed-wio-tracker-l1.json
+      - pio-board/nrf52840_s140_v7.ld
+    variant_files:
+      - variant/variant.h
+      - variant/variant.cpp
     platform_packages:
       - framework-arduinoadafruitnrf52 @ https://github.com/meshcore-dev/Adafruit_nRF52_Arduino#d541301
   capabilities:
@@ -46,7 +53,7 @@ board:
 
 build:
   includes:
-    - firmware/boards/wio_tracker_l1
+    - boards/wio_tracker_l1
   defines:
     WIO_TRACKER_L1: "1"
     USE_SX1262: "1"

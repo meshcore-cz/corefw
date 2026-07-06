@@ -106,12 +106,16 @@ firmware/             the C++ kernel & component implementations
   kernel/             mechanisms: protocol, events, power, Kernel API
     protocol/         wire-compatible Packet, AdvertData, Identity, Advert, PacketHash
     runtime/          Dispatcher (radio scheduler), FloodRouter, Dedup, Airtime, Clock
-    companion/        Companion Protocol frame codec + command/response/push codes
+    companion/        Companion Protocol: frame codec, all CMD/RESP/PUSH codes, command handler
+    ui/               CompanionUI (OLED screen model) + RTTTL buzzer/melody sequencer
     include/corefw/   the public Board/Module/Policy/Mesh/Radio/Kernel API
   drivers/
     crypto/ed25519/   vendored orlp/ed25519 (same lib as MeshCore) — see its LICENSE
     crypto/sha256/    packet-hash digest (matches Core Protocol packet hash)
     radio/sx1262/     SX1262 RadioDriver (target-only, RadioLib)
+    display/sh1106/   SH1106 OLED driver (target-only, Adafruit)
+    buzzer/           Arduino tone() buzzer output (target-only)
+  boards/wio_tracker_l1/  BLE transport + companion entrypoint (target-only)
 profiles/             example build profiles
 examples/             an example external component
 docs/                 architecture & how-to guides
@@ -142,7 +146,9 @@ existing MeshCore phone apps connect unchanged.
 | Identity / ECDH | Ed25519 + X25519 (same `orlp/ed25519`) | `identity_test.cpp` (MeshCore vector) |
 | Packet hash / dedup | `SHA256(type‖payload)[:8]` | `runtime_test.cpp` |
 | Repeater (flood) | append-path forward, echo suppression, duty cycle | `runtime_test.cpp` |
-| Companion | `>`/`<` framing + all CMD/RESP/PUSH codes | `companion_test.cpp` |
+| Companion framing | `>`/`<` + LE16 length, split/resync | `companion_test.cpp` |
+| Companion commands | DEVICE_INFO / SELF_INFO / time / batt / config frames | `commands_test.cpp` |
+| Companion UI + beeps | OLED screen model, RTTTL melody sequencing | `ui_test.cpp` |
 
 ## Design
 

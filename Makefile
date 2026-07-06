@@ -28,12 +28,16 @@ go-test:
 
 SHA256DIR = firmware/drivers/crypto/sha256
 
+TESTDIR = tests/cpp
+
 cpp-test: crypto-objs
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/protocol/protocol_test.cpp -o /tmp/corefw_ptest && /tmp/corefw_ptest
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/Kernel.cpp firmware/kernel/kernel_test.cpp -o /tmp/corefw_ktest && /tmp/corefw_ktest
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(CRYPTODIR) firmware/kernel/protocol/identity_test.cpp $(OBJDIR)/ed25519/*.o -o /tmp/corefw_idtest && /tmp/corefw_idtest
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) firmware/kernel/runtime/runtime_test.cpp $(OBJDIR)/sha256.o -o /tmp/corefw_rtest && /tmp/corefw_rtest
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/companion/companion_test.cpp -o /tmp/corefw_ctest && /tmp/corefw_ctest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/protocol_test.cpp -o /tmp/corefw_ptest && /tmp/corefw_ptest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/Kernel.cpp $(TESTDIR)/kernel_test.cpp -o /tmp/corefw_ktest && /tmp/corefw_ktest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(CRYPTODIR) $(TESTDIR)/identity_test.cpp $(OBJDIR)/ed25519/*.o -o /tmp/corefw_idtest && /tmp/corefw_idtest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) $(TESTDIR)/runtime_test.cpp $(OBJDIR)/sha256.o -o /tmp/corefw_rtest && /tmp/corefw_rtest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/companion_test.cpp -o /tmp/corefw_ctest && /tmp/corefw_ctest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/commands_test.cpp -o /tmp/corefw_cmdtest && /tmp/corefw_cmdtest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/ui_test.cpp -o /tmp/corefw_uitest && /tmp/corefw_uitest
 
 # Compile the vendored orlp/ed25519 and SHA-256 sources as C into build/obj.
 crypto-objs:

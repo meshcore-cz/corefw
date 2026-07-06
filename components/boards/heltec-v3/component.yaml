@@ -46,7 +46,7 @@ board:
 # board's schematic and must not be changed by users.
 build:
   includes:
-    - firmware/boards/heltec_v3
+    - boards/heltec_v3
   defines:
     HELTEC_LORA_V3: "1"
     ESP32_CPU_FREQ: "80"

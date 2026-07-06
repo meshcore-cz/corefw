@@ -33,6 +33,17 @@ type Component struct {
 	Manifest manifest.Manifest
 	Schema   schema.Schema
 	Origin   Origin
+
+	// fsys/rel locate the component's files uniformly, whether it was embedded
+	// (built-in) or loaded from disk. Used to read auxiliary support files.
+	fsys fs.FS
+	rel  string
+}
+
+// ReadFile reads a file relative to the component's directory, transparently
+// handling embedded (built-in) and on-disk (local/git) components.
+func (c *Component) ReadFile(rel string) ([]byte, error) {
+	return fs.ReadFile(c.fsys, join(c.rel, rel))
 }
 
 // ID returns the component id.
@@ -112,7 +123,7 @@ func LoadDir(dir string, origin Origin) (*Component, error) {
 // loadFromFS reads component.yaml and (optional) schema.yaml from a directory
 // inside any fs.FS.
 func loadFromFS(fsys fs.FS, dir string) (*Component, error) {
-	comp := &Component{}
+	comp := &Component{fsys: fsys, rel: dir}
 
 	mBytes, err := fs.ReadFile(fsys, join(dir, "component.yaml"))
 	if err != nil {

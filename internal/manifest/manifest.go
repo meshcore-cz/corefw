@@ -133,8 +133,17 @@ type PlatformIOBoard struct {
 	Framework       string   `yaml:"framework"`        // arduino / espidf
 	PlatformPackages []string `yaml:"platform_packages"` // optional framework overrides
 	BaseEnv         string   `yaml:"base_env"`         // legacy grouping label (esp32/nrf52)
-	LdScript        string   `yaml:"ldscript"`         // optional linker script
+	LdScript        string   `yaml:"ldscript"`         // optional linker script (project-relative)
 	MaxSize         int      `yaml:"max_size"`         // optional upload size cap
+	// SupportFiles are auxiliary files (custom board JSON, linker scripts) the
+	// component ships that must be copied into the generated project's boards/
+	// directory so PlatformIO can find them. Paths are relative to the
+	// component directory.
+	SupportFiles []string `yaml:"support_files"`
+	// VariantFiles are the Arduino "variant" pin-definition sources (variant.h,
+	// variant.cpp) some cores (nRF52) require. They are copied into a variant/
+	// directory that is added to the include path and compiled.
+	VariantFiles []string `yaml:"variant_files"`
 }
 
 // BoardLimits records hard ceilings the resolver enforces.
