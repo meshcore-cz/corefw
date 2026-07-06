@@ -1,0 +1,23 @@
+properties:
+  transport:
+    type: enum
+    enum: [usb, ble, wifi]
+    default: ble
+    description: Companion transport used to reach the phone/app.
+  max_contacts:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    default: 350
+  max_group_channels:
+    type: integer
+    minimum: 1
+    maximum: 100
+    default: 40
+  offline_queue_size:
+    type: integer
+    minimum: 16
+    maximum: 1024
+    default: 256
+required:
+  - transport

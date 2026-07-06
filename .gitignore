@@ -1,0 +1,10 @@
+# Build output
+/build/
+/corefw
+*.o
+
+# corefw source cache for git-loaded external components
+.corefw-cache/
+
+# Editor / OS
+.DS_Store

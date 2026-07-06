@@ -1,0 +1,28 @@
+properties:
+  low_battery:
+    type: integer
+    minimum: 1
+    maximum: 99
+    unit: percent
+    default: 30
+    description: Battery percentage below which the device enters a low-power regime.
+  critical_battery:
+    type: integer
+    minimum: 1
+    maximum: 99
+    unit: percent
+    default: 15
+    description: Battery percentage below which the device deep-sleeps to preserve reserve.
+  tx_power:
+    type: integer
+    minimum: 1
+    maximum: 22
+    unit: dBm
+    default: 22
+    description: LoRa transmit power. Capped by the board's max_tx_power_dbm.
+required:
+  - low_battery
+  - critical_battery
+rules:
+  - less_than: [critical_battery, low_battery]
+    message: critical_battery must be lower than low_battery

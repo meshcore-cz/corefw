@@ -1,0 +1,37 @@
+id: companion
+type: module
+version: 0.1.0
+status: official
+license: MIT
+description: Companion radio role — pairs with a phone/app over BLE, USB or Wi-Fi
+maintainers:
+  - jan.stransky@arnal.cz
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  module_api: "^0.1"
+
+requires:
+  capabilities:
+    - radio
+
+resources:
+  flash: 60000
+  ram_static: 8192
+
+build:
+  uses_display: true
+  src_filter:
+    - +<modules/companion/*.cpp>
+  define_templates:
+    max_contacts: MAX_CONTACTS
+    max_group_channels: MAX_GROUP_CHANNELS
+    offline_queue_size: OFFLINE_QUEUE_SIZE
+
+codegen:
+  class: CompanionModule
+  header: corefw/modules/CompanionModule.h
+  var: companion
+  register: registerModule
+  setters:
+    transport: setTransport

@@ -1,0 +1,64 @@
+id: wio-tracker-l1
+type: board
+version: 0.1.0
+status: official
+license: MIT
+description: Seeed Wio Tracker L1 (nRF52840 + SX1262, SH1106 OLED, GPS)
+maintainers:
+  - jan.stransky@arnal.cz
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  board_api: "^0.1"
+
+provides:
+  - radio
+  - display
+  - battery
+  - gps
+
+board:
+  architecture: nrf52840
+  framework: arduino
+  platformio:
+    board: seeed-wio-tracker-l1
+    base_env: nrf52_base
+    ldscript: boards/nrf52840_s140_v7.ld
+  capabilities:
+    radio: true
+    display: true
+    battery: true
+    gps: true
+    bluetooth: true
+    usb: true
+    wifi: false
+    deep_sleep: true
+  limits:
+    max_tx_power_dbm: 22
+    ram_budget: 235520   # from board json maximum_ram_size
+  display:
+    class: SH1106Display
+    sources:
+      - +<drivers/display/sh1106/*.cpp>
+
+build:
+  includes:
+    - firmware/boards/wio_tracker_l1
+  defines:
+    WIO_TRACKER_L1: "1"
+    USE_SX1262: "1"
+    RADIO_CLASS: CustomSX1262
+    WRAPPER_CLASS: CustomSX1262Wrapper
+    SX126X_CURRENT_LIMIT: "140"
+    SX126X_RX_BOOSTED_GAIN: "1"
+    PIN_OLED_RESET: "-1"
+    GPS_BAUD_RATE: "9600"
+    LORA_TX_POWER: "22"
+  src_filter:
+    - +<boards/wio_tracker_l1/*.cpp>
+
+codegen:
+  class: WioTrackerL1Board
+  header: corefw/boards/WioTrackerL1Board.h
+  var: board
+  register: registerBoard

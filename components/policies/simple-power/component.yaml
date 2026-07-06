@@ -1,0 +1,26 @@
+id: simple-power
+type: policy
+version: 0.1.0
+status: official
+license: MIT
+description: Baseline power policy with low/critical battery thresholds and TX power
+maintainers:
+  - jan.stransky@arnal.cz
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  policy_api: "^0.1"
+
+resources:
+  flash: 4000
+  ram_static: 256
+
+codegen:
+  class: SimplePowerPolicy
+  header: corefw/policies/SimplePowerPolicy.h
+  var: power_policy
+  register: setPowerPolicy
+  setters:
+    low_battery: setLowBatteryThreshold
+    critical_battery: setCriticalBatteryThreshold
+    tx_power: setTxPower

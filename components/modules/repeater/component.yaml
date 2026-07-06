@@ -1,0 +1,38 @@
+id: repeater
+type: module
+version: 0.1.0
+status: official
+license: MIT
+description: Store-and-forward repeater role — rebroadcasts mesh packets
+maintainers:
+  - jan.stransky@arnal.cz
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  module_api: "^0.1"
+
+requires:
+  capabilities:
+    - radio
+
+resources:
+  flash: 24000
+  ram_static: 2048
+
+build:
+  uses_display: true
+  src_filter:
+    - +<modules/repeater/*.cpp>
+  # MAX_NEIGHBOURS sizes a static table, so it must be known at compile time.
+  define_templates:
+    max_neighbours: MAX_NEIGHBOURS
+
+codegen:
+  class: RepeaterModule
+  header: corefw/modules/RepeaterModule.h
+  var: repeater
+  register: registerModule
+  setters:
+    advert_name: setAdvertName
+    admin_password: setAdminPassword
+    max_neighbours: setMaxNeighbours

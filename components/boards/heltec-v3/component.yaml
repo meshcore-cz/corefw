@@ -1,0 +1,81 @@
+id: heltec-v3
+type: board
+version: 0.1.0
+status: official
+license: MIT
+description: Heltec WiFi LoRa 32 V3 (ESP32-S3 + SX1262, 0.96" SSD1306 OLED)
+maintainers:
+  - jan.stransky@arnal.cz
+
+compatibility:
+  platform: ">=0.1 <0.2"
+  board_api: "^0.1"
+
+# Abstract services this board contributes to dependent modules/policies.
+provides:
+  - radio
+  - display
+  - battery
+
+board:
+  architecture: esp32-s3
+  framework: arduino
+  platformio:
+    board: esp32-s3-devkitc-1
+    base_env: esp32_base
+  capabilities:
+    radio: true
+    display: true
+    battery: true
+    bluetooth: true
+    wifi: true
+    usb: true
+    gps: true
+    deep_sleep: true
+  limits:
+    max_tx_power_dbm: 22
+    ram_budget: 327680   # ~320 KiB usable SRAM (early estimate only)
+  display:
+    class: SSD1306Display
+    sources:
+      - +<drivers/display/ssd1306/*.cpp>
+
+# Fixed hardware wiring for this board, emitted as -D defines. These mirror the
+# board's schematic and must not be changed by users.
+build:
+  includes:
+    - firmware/boards/heltec_v3
+  defines:
+    HELTEC_LORA_V3: "1"
+    ESP32_CPU_FREQ: "80"
+    USE_SX1262: "1"
+    RADIO_CLASS: CustomSX1262
+    WRAPPER_CLASS: CustomSX1262Wrapper
+    P_LORA_DIO_1: "14"
+    P_LORA_NSS: "8"
+    P_LORA_RESET: RADIOLIB_NC
+    P_LORA_BUSY: "13"
+    P_LORA_SCLK: "9"
+    P_LORA_MISO: "11"
+    P_LORA_MOSI: "10"
+    P_LORA_TX_LED: "35"
+    PIN_BOARD_SDA: "17"
+    PIN_BOARD_SCL: "18"
+    PIN_USER_BTN: "0"
+    PIN_VEXT_EN: "36"
+    PIN_GPS_RX: "47"
+    PIN_GPS_TX: "48"
+    PIN_GPS_EN: "26"
+    SX126X_DIO2_AS_RF_SWITCH: "true"
+    SX126X_DIO3_TCXO_VOLTAGE: "1.8"
+    SX126X_CURRENT_LIMIT: "140"
+    SX126X_RX_BOOSTED_GAIN: "1"
+    LORA_TX_POWER: "22"
+  src_filter:
+    - +<boards/heltec_v3/*.cpp>
+
+codegen:
+  class: HeltecV3Board
+  header: corefw/boards/HeltecV3Board.h
+  var: board
+  register: registerBoard

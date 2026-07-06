@@ -1,0 +1,21 @@
+properties:
+  advert_name:
+    type: string
+    default: "CoreFW Repeater"
+    description: The node name advertised to the mesh.
+  admin_password:
+    type: string
+    default: "password"
+    description: Password for remote administration commands.
+  max_neighbours:
+    type: integer
+    minimum: 1
+    maximum: 200
+    default: 50
+    description: Size of the neighbour table.
+  advert_interval:
+    type: duration
+    default: 15min
+    description: How often to broadcast a self-advertisement.
+required:
+  - advert_name
