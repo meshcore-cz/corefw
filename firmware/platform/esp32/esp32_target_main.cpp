@@ -19,7 +19,18 @@
 #include <Arduino.h>
 #include <cstring>
 
-#include <corefw/modules/CompanionModule.h>
+// Companion protocol infrastructure lives in the kernel tree and is always
+// available; the platform host/sender/receiver below are built on it. The
+// CompanionModule role class is a self-encapsulated component, copied in and
+// included only when the profile selected it (COREFW_HAS_COMPANION).
+#include <corefw/companion/Commands.h>
+#include <corefw/companion/Receiver.h>
+#include <corefw/companion/State.h>
+#include <corefw/companion/Storage.h>
+#include <corefw/companion/Transport.h>
+#if COREFW_HAS_COMPANION
+#include <CompanionModule.h>
+#endif
 #if COREFW_HAS_REPEATER
 #include <RepeaterModule.h>  // self-encapsulated component; copied in when selected
 #endif
@@ -27,9 +38,6 @@
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
 #include <platform/shared/PlatformTx.h>
-
-#include <corefw/companion/Storage.h>
-#include <corefw/companion/Transport.h>
 
 #include "ESP32BLETransport.h"
 #include "ESP32FileStore.h"
@@ -88,7 +96,13 @@ static Kernel g_kernel;
 static proto::LocalIdentity g_identity;
 static board::ESP32FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
+#if COREFW_HAS_COMPANION
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+#endif
+// The active companion state (identity, radio, prefs). The platform host/sender
+// read through this pointer, so they never need the CompanionModule type; it is
+// set in setup() when a companion is present and stays null otherwise.
+static companion::CompanionState* g_state = nullptr;
 #if COREFW_HAS_REPEATER
 static RepeaterModule* g_repeater = nullptr;    // resolved in setup() when selected
 #endif
@@ -145,13 +159,13 @@ class HeltecCompanionHost : public companion::CompanionHost {
   const char* manufacturerName() override {
     return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Heltec";
   }
-  void savePrefs() override { if (g_companion) g_store.savePrefs(g_companion->state()); }
-  void saveContacts() override { if (g_companion) g_store.saveContacts(g_companion->state()); }
-  void saveChannels() override { if (g_companion) g_store.saveChannels(g_companion->state()); }
+  void savePrefs() override { if (g_state) g_store.savePrefs(*g_state); }
+  void saveContacts() override { if (g_state) g_store.saveContacts(*g_state); }
+  void saveChannels() override { if (g_state) g_store.saveChannels(*g_state); }
   void applyRadioParams() override {
-    if (!g_companion || !g_dispatcher) return;
-    g_dispatcher->configureRadio(makeRadioConfig(g_companion->state()));
-    g_dispatcher->setAllowFloodForward(g_companion->state().client_repeat != 0);
+    if (!g_state || !g_dispatcher) return;
+    g_dispatcher->configureRadio(makeRadioConfig(*g_state));
+    g_dispatcher->setAllowFloodForward(g_state->client_repeat != 0);
   }
   void applyTxPower() override { applyRadioParams(); }
   void radioStats(int16_t& noise_floor, int8_t& last_rssi, int8_t& last_snr_q4,
@@ -173,8 +187,12 @@ class HeltecCompanionHost : public companion::CompanionHost {
   bool gpsHasFix() const override { return false; }
   uint8_t gpsSatellites() const override { return 0; }
   int advertPath(const uint8_t* pub_key, uint32_t& recv_ts, uint8_t* path) override {
-    if (!g_companion) return -1;
-    return g_companion->advertPath(pub_key, recv_ts, path);
+#if COREFW_HAS_COMPANION
+    if (g_companion) return g_companion->advertPath(pub_key, recv_ts, path);
+#else
+    (void)pub_key; (void)recv_ts; (void)path;
+#endif
+    return -1;
   }
   // Custom vars fan out to extension modules (e.g. cz-advert-features), so an
   // extension can expose runtime config over CMD_GET/SET_CUSTOM_VAR.
@@ -247,7 +265,7 @@ class HeltecMeshSender : public companion::MeshSender {
   }
   bool sendSelfAdvert(bool flood) override {
     return sendAdvert(proto::ADV_TYPE_CHAT,
-                      g_companion ? g_companion->state().node_name : "corefw",
+                      g_state ? g_state->node_name : "corefw",
                       flood);
   }
 #if COREFW_HAS_REPEATER
@@ -278,8 +296,8 @@ class HeltecMeshSender : public companion::MeshSender {
 
  private:
   bool sendAdvert(uint8_t type, const char* name, bool flood) {
-    if (!g_dispatcher || !g_companion) return false;
-    const companion::CompanionState& st = g_companion->state();
+    if (!g_dispatcher || !g_state) return false;
+    const companion::CompanionState& st = *g_state;
     proto::AdvertData ad;
     ad.type = type;
     std::strncpy(ad.name, name ? name : "", sizeof(ad.name) - 1);
@@ -298,6 +316,7 @@ class HeltecMeshSender : public companion::MeshSender {
 
 static HeltecMeshSender g_sender;
 
+#if COREFW_HAS_COMPANION
 // findCompanion locates the CompanionModule the generated composition
 // registered, so we can attach the board's transport/display to it.
 static CompanionModule* findCompanion() {
@@ -307,6 +326,7 @@ static CompanionModule* findCompanion() {
   }
   return nullptr;
 }
+#endif
 
 #if COREFW_HAS_REPEATER
 static RepeaterModule* findRepeater() {
@@ -368,7 +388,12 @@ void setup() {
   // 1. Bring up the board (buses, radio, power rails) via the composition root.
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
+  bool usb_companion = false;
+#if COREFW_HAS_COMPANION
   g_companion = findCompanion();
+  if (g_companion) g_state = &g_companion->state();
+  usb_companion = g_companion && g_companion->transportKind() == CompanionTransportKind::USB;
+#endif
 #if COREFW_HAS_REPEATER
   g_repeater = findRepeater();
 #endif
@@ -386,23 +411,23 @@ void setup() {
   //    fresh device generates a new identity here, seeded from the hardware RNG.
   showStage("startup", "storage");
   g_fs.begin();
-  if (g_companion) {
-    applyProfileRadioDefaults(g_companion->state());
+  if (g_state) {
+    applyProfileRadioDefaults(*g_state);
     uint8_t seed[proto::SEED_SIZE];
     for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(esp_random());
-    g_store.loadAll(g_companion->state(), seed);
-    g_companion->state().active_ble_pin = activeBlePin(g_companion->state(), display_ok);
-    g_identity = g_companion->state().self;
+    g_store.loadAll(*g_state, seed);
+    g_state->active_ble_pin = activeBlePin(*g_state, display_ok);
+    g_identity = g_state->self;
   }
 
   // 3. Build the radio scheduler around the board's configured radio.
   showStage("startup", "radio");
   RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
-  RadioConfig cfg = g_companion ? makeRadioConfig(g_companion->state()) : RadioConfig{};
+  RadioConfig cfg = g_state ? makeRadioConfig(*g_state) : RadioConfig{};
   static Dispatcher dispatcher(radio, &g_clock, g_identity.pub_key, cfg);
   g_dispatcher = &dispatcher;
-  if (g_companion) {
-    dispatcher.setAllowFloodForward(g_companion->state().client_repeat != 0);
+  if (g_state) {
+    dispatcher.setAllowFloodForward(g_state->client_repeat != 0);
   }
   if (radio) {
     g_radio_ok = radio->begin(cfg);
@@ -410,6 +435,7 @@ void setup() {
   }
   // Deliver received packets to the companion, which decrypts those addressed
   // to this node and surfaces messages/adverts to the app.
+#if COREFW_HAS_COMPANION
   if (g_companion) {
     dispatcher.subscribe(g_companion);
     // Raw-RX diagnostics: stream every received frame to the app's packet log
@@ -418,9 +444,10 @@ void setup() {
     // Surface completed TRACE round-trips to the app (Trace Path view).
     dispatcher.setTraceObserver(g_companion);
   }
+#endif
 
   // 4. Companion transport: USB-serial (simplest, no BLE stack) or NimBLE.
-  if (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) {
+  if (usb_companion) {
     showStage("startup", "usb serial");
     g_usb.begin(115200);
     g_transport = &g_usb;
@@ -429,12 +456,13 @@ void setup() {
     char ble_name[32];
     companion::formatBleDeviceName(
         ble_name, sizeof(ble_name),
-        g_companion ? g_companion->state().node_name : "corefw");
-    g_ble.begin(ble_name, g_companion ? g_companion->state().active_ble_pin : BLE_PIN_CODE);
+        g_state ? g_state->node_name : "corefw");
+    g_ble.begin(ble_name, g_state ? g_state->active_ble_pin : BLE_PIN_CODE);
     g_transport = &g_ble;
   }
 
   // 5. Attach everything to the companion module and start the kernel.
+#if COREFW_HAS_COMPANION
   if (g_companion) {
     CompanionModule* comp = g_companion;
     comp->attachClock(&g_clock);
@@ -443,6 +471,7 @@ void setup() {
     comp->attachTransport(g_transport);
     comp->attachDisplay(kHasDisplay ? &g_display : nullptr);
   }
+#endif
 
   static struct : PowerCoordinator {
     void requireRadioUntil(uint64_t) override {}
@@ -464,6 +493,7 @@ void loop() {
 
   // Reflect transport connection state as kernel events, then pump the companion.
   static bool wasConnected = false;
+#if COREFW_HAS_COMPANION
   if (g_companion) {
 #if defined(PIN_USER_BTN)
     int b = g_btn.poll();
@@ -478,9 +508,12 @@ void loop() {
     }
     g_companion->tick(now);
   }
+#else
+  (void)wasConnected;
+#endif
 
 #if COREFW_HAS_REPEATER
-  if (g_repeater && g_companion && g_radio_ok) {
+  if (g_repeater && g_state && g_radio_ok) {
     static bool boot_advert_sent = false;
     static uint32_t last_advert_ms = 0;
     const uint32_t interval_ms = g_repeater->advertIntervalSeconds() * 1000u;
@@ -505,12 +538,14 @@ void loop() {
   // Wakes early on a LoRa packet (DIO1) and at worst once a second to keep BLE
   // advertising alive. This mirrors MeshCore's opt-in, repeater-oriented sleep.
   {
-    const bool link_live =
-        (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) ||
-        (g_transport && g_transport->connected());
+    bool link_live = (g_transport && g_transport->connected());
+    bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0);
+#if COREFW_HAS_COMPANION
+    link_live = link_live ||
+        (g_companion && g_companion->transportKind() == CompanionTransportKind::USB);
+    pending = pending || (g_companion && g_companion->hasPendingWork());
+#endif
     const bool display_lit = kHasDisplay && g_display.isOn();
-    const bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0) ||
-                         (g_companion && g_companion->hasPendingWork());
     if (now >= 16000 && !link_live && !display_lit && !pending && g_kernel.board()) {
       g_kernel.board()->lightSleep(1000);
     }

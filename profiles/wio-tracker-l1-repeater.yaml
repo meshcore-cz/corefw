@@ -1,0 +1,10 @@
+# A repeater-only Wio Tracker L1 (nrf52) — no companion. Exercises the
+# companion-less build path: CompanionModule is not copied and COREFW_HAS_COMPANION
+# is undefined, so the platform main compiles without the companion role class.
+name: wio-tracker-l1-repeater
+platform: corefw@0.1
+board: wio-tracker-l1
+
+modules:
+  - type: repeater
+    advert_name: "CoreFW Wio Repeater"

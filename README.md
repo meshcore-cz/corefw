@@ -129,11 +129,12 @@ internal/             the Go tooling
   codegen/            PlatformIO project + C++ composition-root generation
   lock/               corefw.lock reproducibility record
   build/              pipeline orchestration
-components/           built-in ("official") components (embedded in the binary)
+components/           built-in components — each self-contained (manifest + C++)
   boards/             heltec-v3, wio-tracker-l1, sensecap-solar
   modules/            repeater, companion
   policies/           simple-power
-firmware/             the C++ kernel & component implementations
+  extensions/         optional add-ons, e.g. cz-advert-features (also the external-component template)
+firmware/             shared C++: kernel, drivers, protocol, companion infra, per-arch mains
   kernel/             mechanisms: protocol, events, power, Kernel API
     protocol/         wire-compatible Packet, AdvertData, Identity, Advert, PacketHash,
                       MessageCrypto (AES-128 + HMAC), Datagram (direct/group/anon builders)
@@ -156,7 +157,6 @@ firmware/             the C++ kernel & component implementations
                       + the shared nRF52 setup()/loop() (Wio, SenseCAP, …)
     esp32/            ESP32 BLE/USB transports, LittleFS/SPIFFS store + shared ESP32 main
 profiles/             example build profiles
-examples/             an example external component
 docs/                 architecture & how-to guides
 ```
 

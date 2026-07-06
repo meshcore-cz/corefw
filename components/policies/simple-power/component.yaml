@@ -17,7 +17,9 @@ resources:
 
 codegen:
   class: SimplePowerPolicy
-  header: corefw/policies/SimplePowerPolicy.h
+  header: SimplePowerPolicy.h
+  sources:
+    - SimplePowerPolicy.h
   var: power_policy
   register: setPowerPolicy
   setters:

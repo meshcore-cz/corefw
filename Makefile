@@ -33,7 +33,7 @@ TESTDIR = tests/cpp
 
 cpp-test: crypto-objs
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/protocol_test.cpp -o /tmp/corefw_ptest && /tmp/corefw_ptest
-	@$(CXX) $(CXXFLAGS) $(INCLUDE) firmware/kernel/Kernel.cpp $(TESTDIR)/kernel_test.cpp -o /tmp/corefw_ktest && /tmp/corefw_ktest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I components/policies/simple-power firmware/kernel/Kernel.cpp $(TESTDIR)/kernel_test.cpp -o /tmp/corefw_ktest && /tmp/corefw_ktest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(CRYPTODIR) $(TESTDIR)/identity_test.cpp $(OBJDIR)/ed25519/*.o -o /tmp/corefw_idtest && /tmp/corefw_idtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) $(TESTDIR)/runtime_test.cpp $(OBJDIR)/sha256.o -o /tmp/corefw_rtest && /tmp/corefw_rtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) $(TESTDIR)/crypto_msg_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o -o /tmp/corefw_cryptotest && /tmp/corefw_cryptotest

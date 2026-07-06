@@ -8,7 +8,7 @@
 //       firmware/kernel/Kernel.cpp firmware/kernel/kernel_test.cpp \
 //       -o /tmp/ktest && /tmp/ktest
 #include <corefw/Kernel.h>
-#include <corefw/policies/SimplePowerPolicy.h>
+#include <SimplePowerPolicy.h>  // self-encapsulated component (see -I in Makefile)
 
 #include <cstdio>
 #include <cstdlib>

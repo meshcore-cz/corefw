@@ -23,7 +23,18 @@
 
 #include <Arduino.h>
 
-#include <corefw/modules/CompanionModule.h>
+// Companion protocol infrastructure lives in the kernel tree and is always
+// available; the platform host/sender/receiver below are built on it. The
+// CompanionModule *role class* is a self-encapsulated component, copied in and
+// included only when the profile selected it (COREFW_HAS_COMPANION).
+#include <corefw/companion/Commands.h>
+#include <corefw/companion/Receiver.h>
+#include <corefw/companion/State.h>
+#include <corefw/companion/Storage.h>
+#include <corefw/companion/Transport.h>
+#if COREFW_HAS_COMPANION
+#include <CompanionModule.h>
+#endif
 #if COREFW_HAS_REPEATER
 #include <RepeaterModule.h>  // self-encapsulated component; copied in when selected
 #endif
@@ -31,9 +42,6 @@
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
 #include <platform/shared/PlatformTx.h>
-
-#include <corefw/companion/Storage.h>
-#include <corefw/companion/Transport.h>
 
 #include "NRF52BLETransport.h"
 #include "NRF52Diag.h"
@@ -129,7 +137,13 @@ extern "C" __attribute__((naked)) void HardFault_Handler(void) {
       " bx r1                               \n");
 }
 static companion::PersistentStore g_store(g_fs);
+#if COREFW_HAS_COMPANION
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+#endif
+// The active companion state (identity, radio, prefs). The platform host/sender
+// read through this pointer, so they never need the CompanionModule type; it is
+// set in setup() when a companion is present and stays null otherwise.
+static companion::CompanionState* g_state = nullptr;
 #if COREFW_HAS_REPEATER
 static RepeaterModule* g_repeater = nullptr;    // resolved in setup() when selected
 #endif
@@ -179,13 +193,13 @@ class WioCompanionHost : public companion::CompanionHost {
   const char* manufacturerName() override {
     return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Seeed Studio";
   }
-  void savePrefs() override { if (g_companion) g_store.savePrefs(g_companion->state()); }
-  void saveContacts() override { if (g_companion) g_store.saveContacts(g_companion->state()); }
-  void saveChannels() override { if (g_companion) g_store.saveChannels(g_companion->state()); }
+  void savePrefs() override { if (g_state) g_store.savePrefs(*g_state); }
+  void saveContacts() override { if (g_state) g_store.saveContacts(*g_state); }
+  void saveChannels() override { if (g_state) g_store.saveChannels(*g_state); }
   void applyRadioParams() override {
-    if (!g_companion || !g_dispatcher) return;
-    g_dispatcher->configureRadio(makeRadioConfig(g_companion->state()));
-    g_dispatcher->setAllowFloodForward(g_companion->state().client_repeat != 0);
+    if (!g_state || !g_dispatcher) return;
+    g_dispatcher->configureRadio(makeRadioConfig(*g_state));
+    g_dispatcher->setAllowFloodForward(g_state->client_repeat != 0);
   }
   void applyTxPower() override { applyRadioParams(); }
   void radioStats(int16_t& noise_floor, int8_t& last_rssi, int8_t& last_snr_q4,
@@ -203,13 +217,17 @@ class WioCompanionHost : public companion::CompanionHost {
     return radio ? radio->noiseFloorDbm() : 0;
   }
   bool gpsEnabled() const override {
-    return g_companion && g_companion->state().gps_enabled != 0 && g_gps.started();
+    return g_state && g_state->gps_enabled != 0 && g_gps.started();
   }
   bool gpsHasFix() const override { return g_gps.hasFix(); }
   uint8_t gpsSatellites() const override { return g_gps.satellites(); }
   int advertPath(const uint8_t* pub_key, uint32_t& recv_ts, uint8_t* path) override {
-    if (!g_companion) return -1;
-    return g_companion->advertPath(pub_key, recv_ts, path);
+#if COREFW_HAS_COMPANION
+    if (g_companion) return g_companion->advertPath(pub_key, recv_ts, path);
+#else
+    (void)pub_key; (void)recv_ts; (void)path;
+#endif
+    return -1;
   }
   // Custom vars fan out to extension modules (e.g. cz-advert-features), so an
   // extension can expose runtime config over CMD_GET/SET_CUSTOM_VAR.
@@ -280,7 +298,7 @@ class WioMeshSender : public companion::MeshSender {
   }
   bool sendSelfAdvert(bool flood) override {
     return sendAdvert(proto::ADV_TYPE_CHAT,
-                      g_companion ? g_companion->state().node_name : "corefw", flood);
+                      g_state ? g_state->node_name : "corefw", flood);
   }
 #if COREFW_HAS_REPEATER
   // Repeater self-advert (ADV_TYPE_REPEATER) so peers learn this is a relay.
@@ -318,8 +336,8 @@ class WioMeshSender : public companion::MeshSender {
     ad.type = type;
     std::strncpy(ad.name, name ? name : "", sizeof(ad.name) - 1);
     ad.name[sizeof(ad.name) - 1] = 0;
-    if (g_companion) {
-      const companion::CompanionState& st = g_companion->state();
+    if (g_state) {
+      const companion::CompanionState& st = *g_state;
       if (st.advert_loc_policy == companion::ADVERT_LOC_SHARE &&
           (st.lat_e6 != 0 || st.lon_e6 != 0)) {
         ad.has_loc = true;
@@ -370,6 +388,7 @@ static ButtonEdge g_btn_right{PIN_BUTTON5};
 static ButtonEdge g_btn_enter{PIN_BUTTON6};
 #endif
 
+#if COREFW_HAS_COMPANION
 // findCompanion locates the CompanionModule the generated composition
 // registered, so we can attach the board's transport/display/buzzer to it.
 static CompanionModule* findCompanion() {
@@ -379,6 +398,7 @@ static CompanionModule* findCompanion() {
   }
   return nullptr;
 }
+#endif
 
 #if COREFW_HAS_REPEATER
 // findRepeater locates the RepeaterModule when the profile selected the repeater
@@ -443,15 +463,18 @@ void setup() {
   // 1. Bring up the board (buses, radio, power rails) via the composition root.
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
+  bool usb_companion = false;
+#if COREFW_HAS_COMPANION
   g_companion = findCompanion();
+  if (g_companion) g_state = &g_companion->state();
+  usb_companion = g_companion && g_companion->transportKind() == CompanionTransportKind::USB;
+#endif
 #if COREFW_HAS_REPEATER
   g_repeater = findRepeater();
 #endif
 
   // Serial debug console: usable whenever the USB CDC is not the companion
   // protocol transport (i.e. BLE builds), so it never corrupts framing.
-  bool usb_companion =
-      g_companion && g_companion->transportKind() == CompanionTransportKind::USB;
   g_dbg.begin(/*enabled=*/!usb_companion);
 
   // Bring up the display early so every potentially blocking startup stage has
@@ -479,22 +502,22 @@ void setup() {
   board::crumb(board::CRUMB_STORAGE_QSPI);
   g_fs.begin();
   board::crumb(board::CRUMB_SETUP);
-  if (g_companion) {
-    applyProfileRadioDefaults(g_companion->state());
+  if (g_state) {
+    applyProfileRadioDefaults(*g_state);
     uint8_t seed[proto::SEED_SIZE];
     for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(random(256));
-    g_store.loadAll(g_companion->state(), seed);
-    g_identity = g_companion->state().self;
+    g_store.loadAll(*g_state, seed);
+    g_identity = g_state->self;
   }
 
   // 3. Build the radio scheduler around the board's configured radio.
   showStage("startup", "radio");
   RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
-  RadioConfig cfg = g_companion ? makeRadioConfig(g_companion->state()) : RadioConfig{};
+  RadioConfig cfg = g_state ? makeRadioConfig(*g_state) : RadioConfig{};
   static Dispatcher dispatcher(radio, &g_clock, g_identity.pub_key, cfg);
   g_dispatcher = &dispatcher;
-  if (g_companion) {
-    dispatcher.setAllowFloodForward(g_companion->state().client_repeat != 0);
+  if (g_state) {
+    dispatcher.setAllowFloodForward(g_state->client_repeat != 0);
   }
   if (radio) {
     g_radio_ok = radio->begin(cfg);
@@ -502,6 +525,7 @@ void setup() {
   }
   // Deliver received packets to the companion, which decrypts those addressed
   // to this node and surfaces messages/adverts to the app.
+#if COREFW_HAS_COMPANION
   if (g_companion) {
     dispatcher.subscribe(g_companion);
     // Raw-RX diagnostics: stream every received frame to the app's packet log
@@ -510,13 +534,14 @@ void setup() {
     // Surface completed TRACE round-trips to the app (Trace Path view).
     dispatcher.setTraceObserver(g_companion);
   }
+#endif
 
   // 4. Peripherals for the companion experience.
 #if defined(PIN_BUZZER)
   showStage("startup", "buzzer");
   g_buzzer.begin();
 #endif
-  if (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) {
+  if (usb_companion) {
     showStage("startup", "usb serial");
     g_usb.begin(115200);
     g_transport = &g_usb;
@@ -525,12 +550,13 @@ void setup() {
     char ble_name[32];
     companion::formatBleDeviceName(
         ble_name, sizeof(ble_name),
-        g_companion ? g_companion->state().node_name : "corefw");
+        g_state ? g_state->node_name : "corefw");
     g_ble.begin(ble_name, BLE_PIN_CODE);
     g_transport = &g_ble;
   }
 
   // 5. Attach everything to the companion module and start the kernel.
+#if COREFW_HAS_COMPANION
   if (g_companion) {
     CompanionModule* comp = g_companion;
     comp->attachClock(&g_clock);
@@ -542,6 +568,7 @@ void setup() {
     comp->attachBuzzer(&g_buzzer);
 #endif
   }
+#endif
 
 #if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
   g_btn_left.begin();
@@ -553,9 +580,9 @@ void setup() {
   // Solar) carry an on-board NMEA receiver on Serial1. Track our own position so
   // it shows on-screen, feeds SELF_INFO, and can be shared in adverts. Enabled
   // by default since the hardware is present; the app can toggle it per session.
-  if (g_companion && g_kernel.board() && g_kernel.board()->capabilities().gps) {
+  if (g_state && g_kernel.board() && g_kernel.board()->capabilities().gps) {
     showStage("startup", "gps");
-    g_companion->state().gps_enabled = 1;
+    g_state->gps_enabled = 1;
     g_gps.begin();
   }
 
@@ -567,7 +594,9 @@ void setup() {
   } power;
   showStage("startup", "kernel");
   g_kernel.begin(dispatcher, power);
+#if COREFW_HAS_COMPANION
   if (g_companion) g_companion->playStartupMelody();
+#endif
   showStage("startup", "loop");
 
   // Arm the watchdog last, so a hang anywhere in the steady-state loop (not the
@@ -580,11 +609,11 @@ void setup() {
 // satellite time when we have no other clock, and re-advertise on the configured
 // interval so peers (and the map) see a fresh location.
 static void serviceGps(uint32_t now_ms) {
-  if (!g_companion || !g_gps.started()) return;
+  if (!g_state || !g_gps.started()) return;
   g_gps.loop();
   if (!g_gps.hasFix()) return;
 
-  companion::CompanionState& st = g_companion->state();
+  companion::CompanionState& st = *g_state;
   st.lat_e6 = g_gps.latE6();
   st.lon_e6 = g_gps.lonE6();
 
@@ -613,6 +642,7 @@ void loop() {
 
   // Reflect transport connection state as kernel events, then pump the companion.
   static bool wasConnected = false;
+#if COREFW_HAS_COMPANION
   if (g_companion) {
 #if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
     if (g_btn_left.pressed()) g_companion->onButton(-1);
@@ -628,6 +658,9 @@ void loop() {
     }
     g_companion->tick(now);
   }
+#else
+  (void)wasConnected;
+#endif
 
 #if COREFW_HAS_REPEATER
   // Repeater self-advert: one zero-hop advert shortly after boot (so neighbours
@@ -651,8 +684,10 @@ void loop() {
   // FreeRTOS tick). This is a light idle — the BLE link and radio receiver stay
   // live and scheduled retransmits still fire within a tick — but it collapses
   // the busy-loop's idle current. Safe on every nRF52 build, connected or not.
-  const bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0) ||
-                       (g_companion && g_companion->hasPendingWork());
+  bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0);
+#if COREFW_HAS_COMPANION
+  pending = pending || (g_companion && g_companion->hasPendingWork());
+#endif
   if (!pending && g_kernel.board()) g_kernel.board()->lightSleep(0);
 
   board::crumb(board::CRUMB_LOOP_IDLE);

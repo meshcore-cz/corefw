@@ -31,7 +31,9 @@ build:
 
 codegen:
   class: CompanionModule
-  header: corefw/modules/CompanionModule.h
+  header: CompanionModule.h
+  sources:
+    - CompanionModule.h
   var: companion_module
   register: registerModule
   setters:
