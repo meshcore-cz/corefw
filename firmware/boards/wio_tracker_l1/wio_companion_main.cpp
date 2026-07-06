@@ -22,6 +22,7 @@
 #include <corefw/runtime/Dispatcher.h>
 
 #include <corefw/companion/Storage.h>
+#include <corefw/companion/Transport.h>
 
 #include "NRF52BLETransport.h"
 #include "NRF52Diag.h"
@@ -469,7 +470,11 @@ void setup() {
     g_transport = &g_usb;
   } else {
     showStage("startup", "ble");
-    g_ble.begin(/*name=*/"corefw-wio", BLE_PIN_CODE);
+    char ble_name[32];
+    companion::formatBleDeviceName(
+        ble_name, sizeof(ble_name),
+        g_companion ? g_companion->state().node_name : "corefw");
+    g_ble.begin(ble_name, BLE_PIN_CODE);
     g_transport = &g_ble;
   }
 

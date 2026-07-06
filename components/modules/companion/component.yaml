@@ -24,6 +24,7 @@ build:
   src_filter:
     - +<modules/companion/*.cpp>
   define_templates:
+    ble_pin_code: BLE_PIN_CODE
     max_contacts: MAX_CONTACTS
     max_group_channels: MAX_GROUP_CHANNELS
     offline_queue_size: OFFLINE_QUEUE_SIZE

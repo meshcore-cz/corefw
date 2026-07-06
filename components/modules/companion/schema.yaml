@@ -19,5 +19,10 @@ properties:
     minimum: 16
     maximum: 1024
     default: 256
+  ble_pin_code:
+    type: integer
+    minimum: 0
+    maximum: 999999
+    default: 0
 required:
   - transport

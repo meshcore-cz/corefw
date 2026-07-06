@@ -55,9 +55,9 @@ crypto-objs:
 # Syntax-check the generated composition roots against the kernel headers.
 verify-gen: build
 	./$(BIN) build profiles/heltec-v3-repeater.yaml --no-compile >/dev/null
-	./$(BIN) build profiles/wio-tracker-l1-companion.yaml --no-compile >/dev/null
+	./$(BIN) build profiles/wio-tracker-l1-companion-ble.yaml --no-compile >/dev/null
 	$(CXX) $(CXXFLAGS) -fsyntax-only $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) build/heltec-v3-repeater/src/corefw_main.generated.cpp
-	$(CXX) $(CXXFLAGS) -fsyntax-only $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) build/wio-tracker-l1-companion/src/corefw_main.generated.cpp
+	$(CXX) $(CXXFLAGS) -fsyntax-only $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) build/wio-tracker-l1-companion-ble/src/corefw_main.generated.cpp
 	@echo "generated composition roots compile"
 
 fmt:

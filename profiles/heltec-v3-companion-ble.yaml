@@ -1,0 +1,30 @@
+# A Heltec WiFi LoRa 32 V3 BLE companion — pairs with the MeshCore phone app.
+#
+# Build it with:  corefw build profiles/heltec-v3-companion-ble.yaml
+name: heltec-v3-companion-ble
+platform: corefw@0.1
+
+board: heltec-v3
+
+modules:
+  - type: companion
+    transport: ble
+    max_contacts: 350   # match MeshCore's companion so a full contact set carries over
+    max_group_channels: 40
+    ble_pin_code: 123456 # MeshCore sentinel: random six-digit PIN per boot when display is present
+
+policies:
+  power:
+    type: simple-power
+    low_battery: 25
+    critical_battery: 10
+    tx_power: 22
+
+radio:
+  region: eu868
+  freq: 869.525
+  bandwidth: 250
+  spreading_factor: 11
+
+features:
+  display: true

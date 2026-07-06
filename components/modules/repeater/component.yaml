@@ -34,5 +34,6 @@ codegen:
   register: registerModule
   setters:
     advert_name: setAdvertName
+    advert_interval: setAdvertInterval
     admin_password: setAdminPassword
     max_neighbours: setMaxNeighbours

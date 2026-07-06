@@ -15,13 +15,16 @@
 #if defined(COREFW_TARGET) && defined(ESP32_PLATFORM)
 
 #include <Arduino.h>
+#include <cstring>
 
 #include <corefw/modules/CompanionModule.h>
+#include <corefw/modules/RepeaterModule.h>
 #include <corefw/protocol/Advert.h>
 #include <corefw/runtime/Clock.h>
 #include <corefw/runtime/Dispatcher.h>
 
 #include <corefw/companion/Storage.h>
+#include <corefw/companion/Transport.h>
 
 #include "ESP32BLETransport.h"
 #include "ESP32FileStore.h"
@@ -29,9 +32,6 @@
 // Lives outside the kernel include root; the generated build adds -I firmware.
 #include <drivers/display/ssd1306/SSD1306Display.h>
 
-#ifndef BLE_DEVICE_NAME
-#define BLE_DEVICE_NAME "corefw-heltec"
-#endif
 #ifndef BLE_PIN_CODE
 #define BLE_PIN_CODE 0
 #endif
@@ -74,8 +74,16 @@ static proto::LocalIdentity g_identity;
 static board::ESP32FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
+static RepeaterModule* g_repeater = nullptr;    // resolved in setup() when selected
 static companion::CompanionTransport* g_transport = nullptr;
 static bool g_radio_ok = false;
+
+static uint32_t activeBlePin(const companion::CompanionState& state, bool has_display) {
+  if (state.ble_pin != 0) return state.ble_pin;
+  if (BLE_PIN_CODE == 0) return 0;
+  if (has_display && BLE_PIN_CODE == 123456) return 100000 + (esp_random() % 900000);
+  return BLE_PIN_CODE;
+}
 
 static void applyProfileRadioDefaults(companion::CompanionState& state) {
 #ifdef LORA_FREQ
@@ -218,26 +226,14 @@ class HeltecMeshSender : public companion::MeshSender {
     return true;
   }
   bool sendSelfAdvert(bool flood) override {
-    if (!g_dispatcher || !g_companion) return false;
-    const companion::CompanionState& st = g_companion->state();
-    proto::AdvertData ad;
-    ad.type = proto::ADV_TYPE_CHAT;
-    // Advertise our node name so peers see it.
-    std::strncpy(ad.name, st.node_name, sizeof(ad.name) - 1);
-    ad.name[sizeof(ad.name) - 1] = 0;
-    // Share location only when the user opted in and we actually have a fix.
-    if (st.advert_loc_policy == companion::ADVERT_LOC_SHARE &&
-        (st.lat_e6 != 0 || st.lon_e6 != 0)) {
-      ad.has_loc = true;
-      ad.lat = st.lat_e6;
-      ad.lon = st.lon_e6;
-    }
-    proto::Packet pkt;
-    if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
-    setRoute(pkt, proto::ROUTE_FLOOD);
-    if (!flood) pkt.setPathHashSizeAndCount(1, 0);  // zero-hop
-    g_dispatcher->send(pkt);
-    return true;
+    return sendAdvert(proto::ADV_TYPE_CHAT,
+                      g_companion ? g_companion->state().node_name : "corefw",
+                      flood);
+  }
+  bool sendRepeaterAdvert(bool flood) {
+    return sendAdvert(proto::ADV_TYPE_REPEATER,
+                      g_repeater ? g_repeater->advertName() : "repeater",
+                      flood);
   }
   bool sendAck(const uint8_t* ack, uint8_t ack_len, const companion::ContactInfo& to) override {
     if (!g_dispatcher) return false;
@@ -259,6 +255,26 @@ class HeltecMeshSender : public companion::MeshSender {
   uint32_t random32() override { return esp_random(); }
 
  private:
+  bool sendAdvert(uint8_t type, const char* name, bool flood) {
+    if (!g_dispatcher || !g_companion) return false;
+    const companion::CompanionState& st = g_companion->state();
+    proto::AdvertData ad;
+    ad.type = type;
+    std::strncpy(ad.name, name ? name : "", sizeof(ad.name) - 1);
+    ad.name[sizeof(ad.name) - 1] = 0;
+    if (st.advert_loc_policy == companion::ADVERT_LOC_SHARE &&
+        (st.lat_e6 != 0 || st.lon_e6 != 0)) {
+      ad.has_loc = true;
+      ad.lat = st.lat_e6;
+      ad.lon = st.lon_e6;
+    }
+    proto::Packet pkt;
+    if (!proto::buildAdvert(pkt, g_identity, g_rtc.now(), ad)) return false;
+    setRoute(pkt, proto::ROUTE_FLOOD);
+    if (!flood) pkt.setPathHashSizeAndCount(1, 0);  // zero-hop
+    g_dispatcher->send(pkt);
+    return true;
+  }
   static void applyPath(proto::Packet& pkt, const uint8_t* path, uint8_t path_len) {
     uint8_t n = path_len & 63;
     pkt.setPathHashSizeAndCount(1, n);
@@ -275,6 +291,14 @@ static CompanionModule* findCompanion() {
   for (int i = 0; i < g_kernel.moduleCount(); ++i) {
     Module* m = g_kernel.module(i);
     if (strcmp(m->name(), "companion") == 0) return static_cast<CompanionModule*>(m);
+  }
+  return nullptr;
+}
+
+static RepeaterModule* findRepeater() {
+  for (int i = 0; i < g_kernel.moduleCount(); ++i) {
+    Module* m = g_kernel.module(i);
+    if (strcmp(m->name(), "repeater") == 0) return static_cast<RepeaterModule*>(m);
   }
   return nullptr;
 }
@@ -330,6 +354,7 @@ void setup() {
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
   g_companion = findCompanion();
+  g_repeater = findRepeater();
 
   // Bring up the display early so startup stages are visible on the OLED.
   bool display_ok = g_display.begin();
@@ -348,6 +373,7 @@ void setup() {
     uint8_t seed[proto::SEED_SIZE];
     for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(esp_random());
     g_store.loadAll(g_companion->state(), seed);
+    g_companion->state().active_ble_pin = activeBlePin(g_companion->state(), display_ok);
     g_identity = g_companion->state().self;
   }
 
@@ -382,7 +408,11 @@ void setup() {
     g_transport = &g_usb;
   } else {
     showStage("startup", "ble");
-    g_ble.begin(BLE_DEVICE_NAME, BLE_PIN_CODE);
+    char ble_name[32];
+    companion::formatBleDeviceName(
+        ble_name, sizeof(ble_name),
+        g_companion ? g_companion->state().node_name : "corefw");
+    g_ble.begin(ble_name, g_companion ? g_companion->state().active_ble_pin : BLE_PIN_CODE);
     g_transport = &g_ble;
   }
 
@@ -430,6 +460,20 @@ void loop() {
       wasConnected = nowConnected;
     }
     g_companion->tick(now);
+  }
+
+  if (g_repeater && g_companion && g_radio_ok) {
+    static bool boot_advert_sent = false;
+    static uint32_t last_advert_ms = 0;
+    const uint32_t interval_ms = g_repeater->advertIntervalSeconds() * 1000u;
+    if (!boot_advert_sent && now >= 16000) {
+      g_sender.sendRepeaterAdvert(/*flood=*/false);
+      last_advert_ms = now;
+      boot_advert_sent = true;
+    } else if (boot_advert_sent && interval_ms != 0 && now - last_advert_ms >= interval_ms) {
+      g_sender.sendRepeaterAdvert(/*flood=*/false);
+      last_advert_ms = now;
+    }
   }
 }
 

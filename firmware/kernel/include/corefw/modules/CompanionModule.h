@@ -61,9 +61,7 @@ class CompanionModule : public Module,
     payload[1] = uint8_t(snr_q4);
     payload[2] = uint8_t(rssi);
     std::memcpy(&payload[3], raw, len);
-    uint8_t out[companion::MAX_FRAME_SIZE + 3];
-    size_t on = companion::encodeFrame(out, payload, len + 3);
-    if (on > 0) scheduleIo(out, on);
+    queuePayload(payload, len + 3);
   }
 
   // TraceObserver: a TRACE we originated has returned. Emit PUSH_CODE_TRACE_DATA
@@ -90,9 +88,7 @@ class CompanionModule : public Module,
     std::memcpy(&payload[i], hashes, hash_len); i += hash_len;
     std::memcpy(&payload[i], snrs, nsnr); i += nsnr;
     payload[i++] = uint8_t(final_snr_q4);
-    uint8_t out[companion::MAX_FRAME_SIZE + 3];
-    size_t on = companion::encodeFrame(out, payload, i);
-    if (on > 0) scheduleIo(out, on);
+    queuePayload(payload, i);
   }
 
   // --- Configuration (from generated code) --------------------------------
@@ -121,7 +117,7 @@ class CompanionModule : public Module,
   void initialize(Context& ctx) override {
     ctx_ = &ctx;
     ui_.setNodeName(state_.node_name);
-    ui_.setBlePin(state_.ble_pin);
+    ui_.setBlePin(displayBlePin());
     ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
     ui_.begin(clock_ ? clock_->millis() : 0);
   }
@@ -212,9 +208,7 @@ class CompanionModule : public Module,
       std::memcpy(&f[1], contact.id.pub_key, proto::PUB_KEY_SIZE);
       n = 1 + proto::PUB_KEY_SIZE;
     }
-    uint8_t out[companion::MAX_FRAME_SIZE + 3];
-    size_t on = companion::encodeFrame(out, f, n);
-    if (on > 0) scheduleIo(out, on);
+    queuePayload(f, n);
   }
 
   // A PAYLOAD_ACK (direct or embedded in a path return) for a message we sent:
@@ -368,9 +362,7 @@ class CompanionModule : public Module,
     explicit TransportWriter(CompanionModule* mod) : mod_(mod) {}
     void writeFrame(const uint8_t* data, size_t len) override {
       if (!mod_ || !mod_->io_) return;
-      uint8_t out[companion::MAX_FRAME_SIZE + 3];
-      size_t n = companion::encodeFrame(out, data, len);
-      if (n > 0) mod_->scheduleIo(out, n);
+      mod_->queuePayload(data, len);
     }
    private:
     CompanionModule* mod_;
@@ -386,11 +378,16 @@ class CompanionModule : public Module,
     companion::CommandHandler handler(state_, *host_, *sender_);
     TransportWriter writer(this);
     bool handled = false;
-    decoder_.feed(in, n, frame_, [&](const uint8_t* payload, size_t plen) {
-      if (handled) return;
+    if (usesSerialFraming()) {
+      decoder_.feed(in, n, frame_, [&](const uint8_t* payload, size_t plen) {
+        if (handled) return;
+        handled = true;
+        handler.handle(payload, plen, writer);
+      });
+    } else {
       handled = true;
-      handler.handle(payload, plen, writer);
-    });
+      handler.handle(in, n, writer);
+    }
     return handled;
   }
 
@@ -412,9 +409,7 @@ class CompanionModule : public Module,
     (void)who; (void)path_len;
     if (shouldPushToApp()) {
       uint8_t tickle[1] = {companion::PUSH_CODE_MSG_WAITING};
-      uint8_t out[4];
-      size_t nn = companion::encodeFrame(out, tickle, 1);
-      if (nn > 0) scheduleIo(out, nn);
+      queuePayload(tickle, 1);
     }
   }
 
@@ -459,9 +454,22 @@ class CompanionModule : public Module,
 
   // Frame a push payload and queue it on the non-blocking IO ring.
   void pushFrame(const uint8_t* payload, size_t len) {
-    uint8_t out[companion::MAX_FRAME_SIZE + 3];
-    size_t on = companion::encodeFrame(out, payload, len);
-    if (on > 0) scheduleIo(out, on);
+    queuePayload(payload, len);
+  }
+
+  bool usesSerialFraming() const {
+    return transport_kind_ == CompanionTransportKind::USB;
+  }
+
+  void queuePayload(const uint8_t* payload, size_t len) {
+    if (payload == nullptr || len == 0 || len > companion::MAX_FRAME_SIZE) return;
+    if (usesSerialFraming()) {
+      uint8_t out[companion::MAX_FRAME_SIZE + 3];
+      size_t n = companion::encodeFrame(out, payload, len);
+      if (n > 0) scheduleIo(out, n);
+    } else {
+      scheduleIo(payload, len);
+    }
   }
 
   void scheduleIo(const uint8_t* framed, size_t len) {
@@ -492,7 +500,7 @@ class CompanionModule : public Module,
     if (now_ms < next_render_ && !dirty_ && !ui_.dirty()) return;
     if (host_ != nullptr) ui_.setBatteryMilliVolts(host_->batteryMilliVolts());
     ui_.setNodeName(state_.node_name);
-    ui_.setBlePin(state_.ble_pin);
+    ui_.setBlePin(displayBlePin());
     ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
     if (host_ != nullptr) {
       ui_.setNoiseFloorDbm(host_->radioNoiseFloorDbm());
@@ -507,6 +515,10 @@ class CompanionModule : public Module,
   void beep(const char* song) {
     if (buzzer_ == nullptr || clock_ == nullptr) return;
     melody_.play(song, clock_->millis());
+  }
+
+  uint32_t displayBlePin() const {
+    return state_.active_ble_pin != 0 ? state_.active_ble_pin : state_.ble_pin;
   }
 
   Context* ctx_ = nullptr;

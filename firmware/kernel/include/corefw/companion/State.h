@@ -84,6 +84,7 @@ struct CompanionState {
   uint8_t gps_enabled = 0;        // power the GPS and track our own position
   uint32_t gps_interval = 0;      // seconds between auto self-adverts (0 = off)
   uint32_t ble_pin = 0;
+  uint32_t active_ble_pin = 0;    // runtime pairing PIN; not persisted
   uint32_t freq_khz = 869525;   // 869.525 MHz
   uint32_t bw_hz = 250000;      // 250 kHz
   uint8_t sf = 11;

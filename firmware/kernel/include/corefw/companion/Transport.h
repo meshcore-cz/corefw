@@ -8,8 +8,20 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 
 namespace corefw::companion {
+
+// Format the BLE GAP name as "corefw-<node_name>" (MeshCore uses the same
+// pattern with its own prefix). Truncate to 31 bytes — the nRF52 SoftDevice
+// and ESP32 NimBLE stacks reject longer names.
+inline void formatBleDeviceName(char* out, size_t out_cap, const char* node_name) {
+  if (out_cap == 0) return;
+  std::snprintf(out, out_cap, "corefw-%s", node_name ? node_name : "");
+  out[out_cap - 1] = '\0';
+  if (std::strlen(out) > 31) out[31] = '\0';
+}
 
 class CompanionTransport {
  public:
