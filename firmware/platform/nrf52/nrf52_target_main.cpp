@@ -611,9 +611,9 @@ void loop() {
   static bool wasConnected = false;
   if (g_companion) {
 #if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
-    if (g_btn_left.pressed()) g_companion->ui().prevPage();
-    if (g_btn_right.pressed()) g_companion->ui().nextPage();
-    if (g_btn_enter.pressed()) g_companion->ui().clearMessagePreview();
+    if (g_btn_left.pressed()) g_companion->onButton(-1);
+    if (g_btn_right.pressed()) g_companion->onButton(+1);
+    if (g_btn_enter.pressed()) g_companion->onButtonEnter();
 #endif
     bool nowConnected = g_transport ? g_transport->connected() : false;
     if (nowConnected != wasConnected) {
@@ -640,6 +640,15 @@ void loop() {
       last_advert_ms = now;
     }
   }
+  // Power: when there's nothing left to make progress on this pass, hand the
+  // core to the SoftDevice until the next interrupt (radio DIO, BLE, GPS UART,
+  // FreeRTOS tick). This is a light idle — the BLE link and radio receiver stay
+  // live and scheduled retransmits still fire within a tick — but it collapses
+  // the busy-loop's idle current. Safe on every nRF52 build, connected or not.
+  const bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0) ||
+                       (g_companion && g_companion->hasPendingWork());
+  if (!pending && g_kernel.board()) g_kernel.board()->lightSleep(0);
+
   board::crumb(board::CRUMB_LOOP_IDLE);
 }
 

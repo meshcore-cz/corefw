@@ -8,10 +8,14 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/arnal/corefw/internal/cli"
 )
 
 func main() {
-	os.Exit(cli.ExecuteContext(context.Background(), os.Args[1:]))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	os.Exit(cli.ExecuteContext(ctx, os.Args[1:]))
 }

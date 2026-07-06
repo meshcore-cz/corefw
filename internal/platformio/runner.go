@@ -65,11 +65,7 @@ func Run(opts Options) (*Result, error) {
 	fmt.Fprintf(logFile, "$ pio %s\n\n", strings.Join(args, " "))
 
 	phase := progress.PhaseCompile
-	action := "Building firmware"
-	if opts.Upload {
-		phase = progress.PhaseUpload
-		action = "Flashing firmware"
-	}
+	action := "Compiling firmware"
 
 	cmd := exec.CommandContext(ctx, "pio", args...)
 	cmd.Dir = opts.Dir

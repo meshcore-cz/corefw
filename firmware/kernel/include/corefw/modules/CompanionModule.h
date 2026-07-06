@@ -119,7 +119,30 @@ class CompanionModule : public Module,
     ui_.setNodeName(state_.node_name);
     ui_.setBlePin(displayBlePin());
     ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
-    ui_.begin(clock_ ? clock_->millis() : 0);
+    uint32_t now = clock_ ? clock_->millis() : 0;
+    ui_.begin(now);
+    display_off_at_ = now + kDisplayAutoOffMs;
+  }
+
+  // --- User input / display wake -----------------------------------------
+  // A short/long button press. Wakes the screen — and if it was off, consumes
+  // the press so it only turns the display back on (matching MeshCore's
+  // checkDisplayOn) — otherwise pages. dir: +1 next page, -1 previous page.
+  void onButton(int dir) {
+    bool was_off = display_ != nullptr && !display_->isOn();
+    wakeDisplay(clock_ ? clock_->millis() : 0);
+    if (was_off) return;
+    if (dir > 0) ui_.nextPage();
+    else if (dir < 0) ui_.prevPage();
+  }
+
+  // A dedicated "enter" button (multi-button boards): dismiss a message
+  // preview, with the same wake-and-consume behaviour as onButton().
+  void onButtonEnter() {
+    bool was_off = display_ != nullptr && !display_->isOn();
+    wakeDisplay(clock_ ? clock_->millis() : 0);
+    if (was_off) return;
+    ui_.clearMessagePreview();
   }
 
   // tick pumps the transport, command handling, melody and screen. The target
@@ -135,6 +158,13 @@ class CompanionModule : public Module,
       handler.pumpContactSync(writer);
     }
     if (melody_.playing()) melody_.loop(now_ms);
+    // Power: blank the OLED after an idle period (matches MeshCore's
+    // AUTO_OFF_MILLIS). The panel keeps drawing several mA while lit, so this is
+    // the single biggest idle saving; a button press or (disconnected) message
+    // wakes it. Applies on every build, including USB-powered ones.
+    if (display_ != nullptr && display_->isOn() && int32_t(now_ms - display_off_at_) >= 0) {
+      display_->turnOff();
+    }
     refreshUI(now_ms);
   }
 
@@ -333,6 +363,13 @@ class CompanionModule : public Module,
 
   bool connected() const { return connected_; }
 
+  // True while the companion still has local work to make progress on, so the
+  // main loop should keep spinning rather than idle-sleep the MCU: queued
+  // outbound app frames, an in-flight contact sync, or a playing melody.
+  bool hasPendingWork() const {
+    return io_count_ > 0 || state_.contact_sync_active || melody_.playing();
+  }
+
   // GET_ADVERT_PATH lookup (MeshCore advert_paths[] table).
   int advertPath(const uint8_t* pub_key, uint32_t& recv_ts, uint8_t* path) const {
     for (int i = 0; i < kAdvertPathTableSize; i++) {
@@ -406,6 +443,7 @@ class CompanionModule : public Module,
     // attached — when a phone is connected (BLE/USB) it handles notifications,
     // so the OLED preview and buzzer stay quiet, matching MeshCore.
     if (display && !connected_) {
+      wakeDisplay(clock_ ? clock_->millis() : 0);
       ui_.addMessagePreview(path_len, who, text, host_ ? host_->rtcNow() : 0);
       beep(ui::melodies::kMessage);
     }
@@ -500,6 +538,7 @@ class CompanionModule : public Module,
 
   void refreshUI(uint32_t now_ms) {
     if (display_ == nullptr) return;
+    if (!display_->isOn()) return;  // nothing to draw while the panel is blanked
     if (now_ms < next_render_ && !dirty_ && !ui_.dirty()) return;
     if (host_ != nullptr) ui_.setBatteryMilliVolts(host_->batteryMilliVolts());
     ui_.setNodeName(state_.node_name);
@@ -513,6 +552,18 @@ class CompanionModule : public Module,
     uint32_t delay = ui_.render(*display_, now_ms, host_ ? host_->rtcNow() : 0);
     next_render_ = now_ms + delay;
     dirty_ = false;
+  }
+
+  // Turn the panel back on (if off) and (re)arm the idle-off timer. Forces an
+  // immediate redraw so the freshly-lit panel shows current state, not the last
+  // frame left in GDDRAM.
+  void wakeDisplay(uint32_t now_ms) {
+    display_off_at_ = now_ms + kDisplayAutoOffMs;
+    if (display_ != nullptr && !display_->isOn()) {
+      display_->turnOn();
+      dirty_ = true;
+      next_render_ = now_ms;
+    }
   }
 
   void beep(const char* song) {
@@ -542,10 +593,18 @@ class CompanionModule : public Module,
   ui::CompanionUI ui_;
   ui::Melody melody_{nullptr};
 
+  // Idle timeout before the OLED is blanked to save power. Overridable per build;
+  // 15 s matches MeshCore's AUTO_OFF_MILLIS default.
+#ifndef COREFW_DISPLAY_AUTO_OFF_MS
+#define COREFW_DISPLAY_AUTO_OFF_MS 15000u
+#endif
+  static constexpr uint32_t kDisplayAutoOffMs = COREFW_DISPLAY_AUTO_OFF_MS;
+
   bool connected_ = false;
   int unread_ = 0;
   bool dirty_ = true;
   uint32_t next_render_ = 0;
+  uint32_t display_off_at_ = 0;
   AdvertPath advert_paths_[kAdvertPathTableSize] = {};
   uint8_t io_queue_[kIoQueueDepth][companion::MAX_FRAME_SIZE + 3] = {};
   size_t io_queue_len_[kIoQueueDepth] = {};

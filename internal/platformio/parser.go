@@ -18,12 +18,13 @@ var (
 
 // Parser converts PlatformIO output lines into structured progress events.
 type Parser struct {
-	mu             sync.Mutex
-	compileStarted bool
-	linkStarted    bool
-	sizeStarted    bool
-	uploadStarted  bool
-	uploadPort     string
+	mu                   sync.Mutex
+	compileStarted       bool
+	linkStarted          bool
+	sizeStarted          bool
+	uploadStarted        bool
+	buildPhasesCompleted bool
+	uploadPort           string
 }
 
 // NewParser returns a fresh PlatformIO output parser.
@@ -81,6 +82,7 @@ func (p *Parser) ParseLine(stream, line string) []progress.Event {
 		strings.HasPrefix(line, "Uploading "):
 		if !p.uploadStarted {
 			p.uploadStarted = true
+			events = append(events, p.completeBuildPhases()...)
 			events = append(events, p.event(progress.PhaseUpload, progress.StatusStarted, progress.LevelInfo, "Uploading firmware", line, nil))
 		} else {
 			events = append(events, p.event(progress.PhaseUpload, progress.StatusProgress, progress.LevelInfo, "Uploading firmware", line, nil))
@@ -124,17 +126,7 @@ func (p *Parser) Complete(upload bool, logPath string) []progress.Event {
 	defer p.mu.Unlock()
 
 	var events []progress.Event
-	if p.compileStarted || p.sizeStarted || p.uploadStarted {
-		events = append(events, p.event(progress.PhaseCompile, progress.StatusCompleted, progress.LevelInfo, "Compiled firmware", "", nil))
-	}
-	if p.linkStarted {
-		events = append(events, p.event(progress.PhaseLink, progress.StatusCompleted, progress.LevelInfo, "Linked firmware", "", nil))
-	} else if p.compileStarted || p.sizeStarted || p.uploadStarted {
-		events = append(events, p.event(progress.PhaseLink, progress.StatusSkipped, progress.LevelInfo, "Link step not needed", "", nil))
-	}
-	if p.sizeStarted {
-		events = append(events, p.event(progress.PhaseSize, progress.StatusCompleted, progress.LevelInfo, "Checked firmware size", "", nil))
-	}
+	events = append(events, p.completeBuildPhases()...)
 	if upload {
 		message := "Flashed firmware"
 		detail := logPath
@@ -145,6 +137,27 @@ func (p *Parser) Complete(upload bool, logPath string) []progress.Event {
 			}
 		}
 		events = append(events, p.event(progress.PhaseUpload, progress.StatusCompleted, progress.LevelInfo, message, detail, nil))
+	}
+	return events
+}
+
+func (p *Parser) completeBuildPhases() []progress.Event {
+	if p.buildPhasesCompleted {
+		return nil
+	}
+	p.buildPhasesCompleted = true
+
+	var events []progress.Event
+	if p.compileStarted || p.sizeStarted || p.uploadStarted {
+		events = append(events, p.event(progress.PhaseCompile, progress.StatusCompleted, progress.LevelInfo, "Compiled firmware", "", nil))
+	}
+	if p.linkStarted {
+		events = append(events, p.event(progress.PhaseLink, progress.StatusCompleted, progress.LevelInfo, "Linked firmware", "", nil))
+	} else if p.compileStarted || p.sizeStarted || p.uploadStarted {
+		events = append(events, p.event(progress.PhaseLink, progress.StatusSkipped, progress.LevelInfo, "Link step not needed", "", nil))
+	}
+	if p.sizeStarted {
+		events = append(events, p.event(progress.PhaseSize, progress.StatusCompleted, progress.LevelInfo, "Checked firmware size", "", nil))
 	}
 	return events
 }

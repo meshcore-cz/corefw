@@ -461,8 +461,7 @@ void loop() {
   if (g_companion) {
 #if defined(PIN_USER_BTN)
     int b = g_btn.poll();
-    if (b > 0) g_companion->ui().nextPage();
-    else if (b < 0) g_companion->ui().prevPage();
+    if (b != 0) g_companion->onButton(b);  // wakes the display, then pages
 #endif
     bool nowConnected = g_transport ? g_transport->connected() : false;
     if (nowConnected != wasConnected) {
@@ -487,6 +486,28 @@ void loop() {
       last_advert_ms = now;
     }
   }
+
+#if defined(COREFW_ESP32_POWERSAVE)
+  // Power: opt-in MCU light-sleep for ESP32 builds (default OFF). Unlike the
+  // nRF52 WFE idle, esp_light_sleep_start() powers down the RF/BLE controller,
+  // so it is ONLY safe when no companion link is live: a connected BLE/USB
+  // session — or an open USB-CDC transport at all — would drop. We therefore
+  // sleep only while disconnected, the OLED is blanked, and nothing is pending,
+  // and only after a boot grace period so pairing/first-advert isn't disrupted.
+  // Wakes early on a LoRa packet (DIO1) and at worst once a second to keep BLE
+  // advertising alive. This mirrors MeshCore's opt-in, repeater-oriented sleep.
+  {
+    const bool link_live =
+        (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) ||
+        (g_transport && g_transport->connected());
+    const bool display_lit = kHasDisplay && g_display.isOn();
+    const bool pending = (g_dispatcher && g_dispatcher->queueDepth() > 0) ||
+                         (g_companion && g_companion->hasPendingWork());
+    if (now >= 16000 && !link_live && !display_lit && !pending && g_kernel.board()) {
+      g_kernel.board()->lightSleep(1000);
+    }
+  }
+#endif
 }
 
 #endif  // COREFW_TARGET && ESP32_PLATFORM

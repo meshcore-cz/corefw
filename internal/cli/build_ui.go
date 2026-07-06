@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"strings"
@@ -45,10 +46,20 @@ type buildUIModel struct {
 	eventsClosed bool
 	result       *build.Result
 	buildErr     error
+	cancel       context.CancelFunc
+	interrupted  bool
 	width        int
 }
 
 func runBuildUI(opts build.Options, ui buildUIOptions, runner BuildRunner) (*build.Result, error) {
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	buildCtx, cancel := context.WithCancel(parent)
+	defer cancel()
+	opts.Context = buildCtx
+
 	events := make(chan progress.Event, 512)
 	opts.Reporter = progress.ReporterFunc(func(event progress.Event) {
 		select {
@@ -57,7 +68,7 @@ func runBuildUI(opts build.Options, ui buildUIOptions, runner BuildRunner) (*bui
 		}
 	})
 
-	program := tea.NewProgram(newBuildUIModel(opts, events, runner), tea.WithInput(ui.Stdin), tea.WithOutput(ui.Stdout))
+	program := tea.NewProgram(newBuildUIModel(opts, events, runner, cancel), tea.WithInput(ui.Stdin), tea.WithOutput(ui.Stdout))
 	finalModel, uiErr := program.Run()
 	if model, ok := finalModel.(buildUIModel); ok {
 		if model.buildErr != nil {
@@ -75,11 +86,12 @@ func runBuildUI(opts build.Options, ui buildUIOptions, runner BuildRunner) (*bui
 	return nil, fmt.Errorf("build UI exited before the build completed")
 }
 
-func newBuildUIModel(opts build.Options, events chan progress.Event, runner BuildRunner) buildUIModel {
+func newBuildUIModel(opts build.Options, events chan progress.Event, runner BuildRunner, cancel context.CancelFunc) buildUIModel {
 	return buildUIModel{
 		opts:    opts,
 		events:  events,
 		runner:  runner,
+		cancel:  cancel,
 		spinner: spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("39")))),
 		bar:     bubblesprogress.New(bubblesprogress.WithWidth(40)),
 		status:  make(map[progress.Phase]progress.Status),
@@ -101,6 +113,19 @@ func (m buildUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.KeyPressMsg:
+		if msg.String() == "ctrl+c" {
+			if !m.done {
+				m.interrupted = true
+				if m.cancel != nil {
+					m.cancel()
+				}
+				m.current = progress.Event{Phase: m.current.Phase, Status: progress.StatusProgress, Level: progress.LevelWarning, Message: "Cancelling...", Detail: "Stopping PlatformIO"}
+				return m, nil
+			}
+			return m, tea.Quit
+		}
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.bar.SetWidth(clamp(msg.Width-28, 20, 64))
@@ -139,8 +164,15 @@ func (m buildUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.done = true
 		m.result = msg.result
 		m.buildErr = msg.err
+		if m.interrupted && msg.err != nil {
+			m.buildErr = context.Canceled
+		}
 		if msg.err != nil {
-			m.current = progress.Event{Phase: progress.PhaseCompile, Status: progress.StatusFailed, Level: progress.LevelError, Message: "Build failed", Detail: msg.err.Error()}
+			if m.interrupted {
+				m.current = progress.Event{Phase: m.current.Phase, Status: progress.StatusFailed, Level: progress.LevelWarning, Message: "Cancelled", Detail: "Interrupted by Ctrl+C"}
+			} else {
+				m.current = progress.Event{Phase: progress.PhaseCompile, Status: progress.StatusFailed, Level: progress.LevelError, Message: "Build failed", Detail: msg.err.Error()}
+			}
 		}
 		if m.eventsClosed {
 			cmds = append(cmds, tea.Quit)

@@ -45,6 +45,15 @@ class Board {
   // Sleep is mediated by the kernel/PowerCoordinator; a board only implements
   // the mechanism.
   virtual void deepSleep(uint32_t seconds) { (void)seconds; }
+
+  // Idle the MCU until the next interrupt (radio IRQ, BLE/USB, timer) or up to
+  // `max_ms`, whichever comes first, to cut idle current without dropping any
+  // wake source. The main loop calls this when there is no pending work. Default
+  // is a no-op (host builds and boards without a low-power idle). `max_ms == 0`
+  // means "until the next event" (event-driven idle). This is a light idle, NOT
+  // deep sleep: RAM, the radio receiver, and any BLE/USB link stay live.
+  virtual void lightSleep(uint32_t max_ms) { (void)max_ms; }
+
   virtual void reboot() = 0;
 };
 

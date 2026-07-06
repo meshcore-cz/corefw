@@ -10,6 +10,7 @@
 #pragma once
 
 #include <corefw/Board.h>
+#include <corefw/boards/Nrf52Idle.h>
 
 #if defined(COREFW_TARGET)
 #include <Arduino.h>
@@ -88,6 +89,13 @@ class SenseCapSolarBoard : public Board {
     return nullptr;
 #endif
   }
+  void lightSleep(uint32_t max_ms) override {
+    (void)max_ms;  // event-driven: wake on the next interrupt
+#if defined(COREFW_TARGET)
+    nrf52LightSleep();
+#endif
+  }
+
   void reboot() override { /* NVIC_SystemReset() on target */ }
 
  private:

@@ -21,10 +21,11 @@ func ExecuteContextWithDependencies(ctx context.Context, deps Dependencies, args
 	if err == nil {
 		return 0
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
-	if errors.Is(ctx.Err(), context.Canceled) {
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		fmt.Fprintln(cmd.ErrOrStderr(), "interrupted")
 		return 130
 	}
+	fmt.Fprintf(cmd.ErrOrStderr(), "error: %v\n", err)
 	if isUsageError(err) {
 		return 2
 	}

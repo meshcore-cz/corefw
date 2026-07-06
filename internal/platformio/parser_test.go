@@ -26,7 +26,7 @@ func TestParserDetectsBuildPhases(t *testing.T) {
 func TestParserDetectsUploadProgress(t *testing.T) {
 	parser := NewParser()
 
-	assertEvent(t, parser.ParseLine("stdout", "Uploading .pio/build/heltec/firmware.bin"), progress.PhaseUpload, progress.StatusStarted)
+	assertContainsEvent(t, parser.ParseLine("stdout", "Uploading .pio/build/heltec/firmware.bin"), progress.PhaseUpload, progress.StatusStarted)
 	events := parser.ParseLine("stdout", "Writing at 0x00010000... (42 %)")
 	assertEvent(t, events, progress.PhaseUpload, progress.StatusProgress)
 	if events[0].Progress == nil || events[0].Progress.Percent == nil {
@@ -37,6 +37,34 @@ func TestParserDetectsUploadProgress(t *testing.T) {
 	}
 }
 
+func TestParserCompletesBuildPhasesWhenUploadStarts(t *testing.T) {
+	parser := NewParser()
+
+	parser.ParseLine("stdout", "Building in release mode")
+	parser.ParseLine("stdout", "Linking .pio/build/env/firmware.elf")
+	parser.ParseLine("stdout", "Checking size .pio/build/env/firmware.elf")
+	parser.ParseLine("stdout", "Flash: [==        ]  22.8% (used 760821 bytes from 3342336 bytes)")
+
+	events := parser.ParseLine("stdout", "Configuring upload protocol...")
+	assertContainsEvent(t, events, progress.PhaseCompile, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseLink, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseSize, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusStarted)
+}
+
+func TestParserSkipsMissingLinkWhenUploadStarts(t *testing.T) {
+	parser := NewParser()
+
+	parser.ParseLine("stdout", "Building in release mode")
+	parser.ParseLine("stdout", "Checking size .pio/build/env/firmware.elf")
+
+	events := parser.ParseLine("stdout", "Uploading .pio/build/env/firmware.bin")
+	assertContainsEvent(t, events, progress.PhaseCompile, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseLink, progress.StatusSkipped)
+	assertContainsEvent(t, events, progress.PhaseSize, progress.StatusCompleted)
+	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusStarted)
+}
+
 func TestParserCompleteClosesSkippedAndCompletedPhases(t *testing.T) {
 	parser := NewParser()
 
@@ -44,12 +72,13 @@ func TestParserCompleteClosesSkippedAndCompletedPhases(t *testing.T) {
 	parser.ParseLine("stdout", "Checking size .pio/build/env/firmware.elf")
 	parser.ParseLine("stdout", "Flash: [==        ]  22.8% (used 760821 bytes from 3342336 bytes)")
 	parser.ParseLine("stdout", "Auto-detected: /dev/cu.usbserial-0001")
-	parser.ParseLine("stdout", "Uploading .pio/build/env/firmware.bin")
+
+	startEvents := parser.ParseLine("stdout", "Uploading .pio/build/env/firmware.bin")
+	assertContainsEvent(t, startEvents, progress.PhaseCompile, progress.StatusCompleted)
+	assertContainsEvent(t, startEvents, progress.PhaseLink, progress.StatusSkipped)
+	assertContainsEvent(t, startEvents, progress.PhaseSize, progress.StatusCompleted)
 
 	events := parser.Complete(true, "build/env/platformio.log")
-	assertContainsEvent(t, events, progress.PhaseCompile, progress.StatusCompleted)
-	assertContainsEvent(t, events, progress.PhaseLink, progress.StatusSkipped)
-	assertContainsEvent(t, events, progress.PhaseSize, progress.StatusCompleted)
 	assertContainsEvent(t, events, progress.PhaseUpload, progress.StatusCompleted)
 
 	last := events[len(events)-1]
