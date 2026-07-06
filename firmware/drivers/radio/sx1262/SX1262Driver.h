@@ -17,6 +17,8 @@
 
 namespace corefw {
 
+// MeshCore's RadioLibWrapper arms DIO1 for RX/TX done and polls a flag in
+// recvRaw(); polling the pin directly can miss packets between loop() calls.
 class SX1262Driver : public RadioDriver {
  public:
   SX1262Driver()
@@ -63,7 +65,9 @@ class SX1262Driver : public RadioDriver {
     radio_.setRxBoostedGainMode(SX126X_RX_BOOSTED_GAIN);
 #endif
     radio_.setCurrentLimit(SX126X_CURRENT_LIMIT);
+    radio_.setPacketReceivedAction(onDio1Action);
     started_ = true;
+    irq_ready_ = false;
     startReceive();
     return true;
   }
@@ -81,17 +85,26 @@ class SX1262Driver : public RadioDriver {
 
   bool transmit(const uint8_t* data, size_t len) override {
     bool ok = radio_.transmit(const_cast<uint8_t*>(data), len) == RADIOLIB_ERR_NONE;
+    irq_ready_ = false;  // TX done shares the same DIO1 action
     startReceive();
     return ok;
   }
 
   void startReceive() override {
-    if (started_) radio_.startReceive();
+    if (!started_) return;
+    if (radio_.startReceive() == RADIOLIB_ERR_NONE) in_rx_ = true;
   }
 
   size_t readReceived(uint8_t* buf, size_t cap) override {
-    if (digitalRead(P_LORA_DIO_1) == LOW) return 0;
-    if ((radio_.getIrqFlags() & RADIOLIB_SX126X_IRQ_RX_DONE) == 0) return 0;
+    if (!irq_ready_) {
+      if ((radio_.getIrqFlags() & RADIOLIB_SX126X_IRQ_RX_DONE) == 0) {
+        ensureReceive();
+        return 0;
+      }
+    }
+    irq_ready_ = false;
+    in_rx_ = false;
+
     size_t n = radio_.getPacketLength();
     if (n == 0 || n > cap) {
       uint8_t discard[1];
@@ -111,14 +124,55 @@ class SX1262Driver : public RadioDriver {
 
   float lastSNR() const override { return last_snr_; }
   int lastRSSI() const override { return last_rssi_; }
+  int16_t noiseFloorDbm() const override { return noise_floor_dbm_; }
   void sleep() override { radio_.sleep(); }
 
+  void loop() override {
+    if (!started_ || !in_rx_) return;
+    if (isReceivingPacket()) return;
+    if (num_floor_samples_ < kNumNoiseFloorSamples) {
+      int rssi = int(radio_.getRSSI(false));
+      if (rssi < noise_floor_dbm_ + kSamplingThresholdDb) {
+        num_floor_samples_++;
+        floor_sample_sum_ += rssi;
+      }
+    } else if (floor_sample_sum_ != 0) {
+      noise_floor_dbm_ = int16_t(floor_sample_sum_ / kNumNoiseFloorSamples);
+      if (noise_floor_dbm_ < -120) noise_floor_dbm_ = -120;
+      floor_sample_sum_ = 0;
+      num_floor_samples_ = 0;
+    }
+  }
+
  private:
+  static constexpr int kNumNoiseFloorSamples = 64;
+  static constexpr int kSamplingThresholdDb = 14;
+
+  bool isReceivingPacket() {
+    uint16_t irq = radio_.getIrqFlags();
+    return (irq & RADIOLIB_SX126X_IRQ_HEADER_VALID) != 0 ||
+           (irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED) != 0;
+  }
+
+  static void onDio1Action() { irq_ready_ = true; }
+
+  void ensureReceive() {
+    if (!started_ || in_rx_) return;
+    if (radio_.startReceive() == RADIOLIB_ERR_NONE) in_rx_ = true;
+  }
+
   SX1262 radio_;
   bool started_ = false;
+  bool in_rx_ = false;
   float last_snr_ = 0.0f;
   int last_rssi_ = 0;
+  int16_t noise_floor_dbm_ = 0;
+  uint16_t num_floor_samples_ = 0;
+  int32_t floor_sample_sum_ = 0;
+  static volatile bool irq_ready_;
 };
+
+inline volatile bool SX1262Driver::irq_ready_ = false;
 
 }  // namespace corefw
 

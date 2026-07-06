@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <new>
 
 namespace corefw::companion {
 
@@ -79,31 +80,43 @@ class PersistentStore {
   // Loads all /contacts3 records into the state's contact table (skipping
   // transient entries the reference never persists is the writer's job).
   bool loadContacts(CompanionState& s) {
-    uint8_t buf[kMaxContacts * CONTACT_RECORD_SIZE];
-    size_t n = fs_.read(CONTACTS_FILE, buf, sizeof(buf));
+    // Heap, not stack: kMaxContacts*152 is up to ~53 KB (350 contacts) and the
+    // whole-file buffer would blow a small task stack (the ESP32 Arduino loop
+    // task is only 8 KB). Allocated transiently for the load, freed on return.
+    const size_t cap = size_t(kMaxContacts) * CONTACT_RECORD_SIZE;
+    uint8_t* buf = new (std::nothrow) uint8_t[cap];
+    if (!buf) return false;
+    size_t n = fs_.read(CONTACTS_FILE, buf, cap);
     s.num_contacts = 0;
     for (size_t off = 0; off + CONTACT_RECORD_SIZE <= n && s.num_contacts < kMaxContacts;
          off += CONTACT_RECORD_SIZE) {
       decodeContact(&buf[off], s.contacts[s.num_contacts]);
       s.num_contacts++;
     }
+    delete[] buf;
     return n > 0;
   }
   bool saveContacts(const CompanionState& s) {
-    uint8_t buf[kMaxContacts * CONTACT_RECORD_SIZE];
+    const size_t cap = size_t(kMaxContacts) * CONTACT_RECORD_SIZE;
+    uint8_t* buf = new (std::nothrow) uint8_t[cap];
+    if (!buf) return false;
     size_t off = 0;
     for (int i = 0; i < s.num_contacts; i++) {
       if (s.contacts[i].type == ADV_TYPE_NONE) continue;  // don't persist anon entries
       encodeContact(s.contacts[i], &buf[off]);
       off += CONTACT_RECORD_SIZE;
     }
-    return fs_.write(CONTACTS_FILE, buf, off);
+    bool ok = fs_.write(CONTACTS_FILE, buf, off);
+    delete[] buf;
+    return ok;
   }
 
   // --- Channels -----------------------------------------------------------
   bool loadChannels(CompanionState& s) {
-    uint8_t buf[kMaxGroupChannels * CHANNEL_RECORD_SIZE];
-    size_t n = fs_.read(CHANNELS_FILE, buf, sizeof(buf));
+    const size_t cap = size_t(kMaxGroupChannels) * CHANNEL_RECORD_SIZE;
+    uint8_t* buf = new (std::nothrow) uint8_t[cap];
+    if (!buf) return false;
+    size_t n = fs_.read(CHANNELS_FILE, buf, cap);
     int idx = 0;
     for (size_t off = 0; off + CHANNEL_RECORD_SIZE <= n && idx < kMaxGroupChannels;
          off += CHANNEL_RECORD_SIZE) {
@@ -111,10 +124,13 @@ class PersistentStore {
       s.channel_used[idx] = true;
       idx++;
     }
+    delete[] buf;
     return n > 0;
   }
   bool saveChannels(const CompanionState& s) {
-    uint8_t buf[kMaxGroupChannels * CHANNEL_RECORD_SIZE];
+    const size_t cap = size_t(kMaxGroupChannels) * CHANNEL_RECORD_SIZE;
+    uint8_t* buf = new (std::nothrow) uint8_t[cap];
+    if (!buf) return false;
     size_t off = 0;
     // Persist the contiguous run of used channels (matches the reference, which
     // stops at the first unused index).
@@ -122,7 +138,9 @@ class PersistentStore {
       encodeChannel(s.channels[i], &buf[off]);
       off += CHANNEL_RECORD_SIZE;
     }
-    return fs_.write(CHANNELS_FILE, buf, off);
+    bool ok = fs_.write(CHANNELS_FILE, buf, off);
+    delete[] buf;
+    return ok;
   }
 
   // loadAll pulls identity(+name), prefs, contacts and channels into `s`,

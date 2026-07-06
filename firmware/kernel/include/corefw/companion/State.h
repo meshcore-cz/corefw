@@ -71,6 +71,11 @@ struct CompanionState {
   int8_t max_tx_power_dbm = 22;
   int32_t lat_e6 = 0;
   int32_t lon_e6 = 0;
+  // GPS runtime settings. Kept in RAM (not in the byte-exact /new_prefs record,
+  // whose layout leaves no aligned room for a uint32 gps_interval): the board
+  // defaults gps_enabled per its capabilities and the app sets these per session.
+  uint8_t gps_enabled = 0;        // power the GPS and track our own position
+  uint32_t gps_interval = 0;      // seconds between auto self-adverts (0 = off)
   uint32_t ble_pin = 0;
   uint32_t freq_khz = 869525;   // 869.525 MHz
   uint32_t bw_hz = 250000;      // 250 kHz
@@ -95,6 +100,12 @@ struct CompanionState {
   uint8_t app_target_ver = 0;         // protocol version the connected app speaks
   bool send_unscoped = false;         // CMD_SET_FLOOD_SCOPE_KEY override
   uint8_t send_scope_key[16] = {};
+
+  // Lazy GET_CONTACTS sync (MeshCore ContactsIterator — one contact per loop).
+  bool contact_sync_active = false;
+  int contact_sync_idx = 0;
+  uint32_t contact_sync_since = 0;
+  uint32_t contact_sync_most_recent = 0;
 
   // --- Stores -------------------------------------------------------------
   ContactInfo contacts[kMaxContacts];

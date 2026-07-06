@@ -86,6 +86,45 @@ std::vector<uint8_t> wireOf(const Packet& p) {
   return std::vector<uint8_t>(buf, buf + n);
 }
 
+// Build a TRACE packet as it travels the mesh: routed hashes live in the payload
+// after tag/auth/flags, and the path field carries the per-hop SNRs recorded so
+// far (encoded path_len == SNR count when the hash size is 1).
+Packet makeTrace(uint32_t tag, uint32_t auth, uint8_t flags,
+                 const std::vector<uint8_t>& hashes, const std::vector<uint8_t>& snrs) {
+  Packet p;
+  p.setRouteAndType(proto::ROUTE_DIRECT, proto::PAYLOAD_TRACE);
+  p.setPathHashSizeAndCount(1, uint8_t(snrs.size()));
+  for (size_t i = 0; i < snrs.size(); i++) p.path[i] = snrs[i];
+  size_t o = 0;
+  o = proto::putU32LE(p.payload, o, tag);
+  o = proto::putU32LE(p.payload, o, auth);
+  p.payload[o++] = flags;
+  std::memcpy(&p.payload[o], hashes.data(), hashes.size());
+  o += hashes.size();
+  p.payload_len = uint16_t(o);
+  return p;
+}
+
+class CapturingTrace : public TraceObserver {
+ public:
+  void onTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* snrs,
+               uint8_t snr_count, const uint8_t* hashes, uint8_t hash_len,
+               int8_t final_snr_q4) override {
+    calls++;
+    this->tag = tag;
+    this->auth = auth;
+    this->flags = flags;
+    this->final_snr = final_snr_q4;
+    snr_vec.assign(snrs, snrs + snr_count);
+    hash_vec.assign(hashes, hashes + hash_len);
+  }
+  int calls = 0;
+  uint32_t tag = 0, auth = 0;
+  uint8_t flags = 0;
+  int8_t final_snr = 0;
+  std::vector<uint8_t> snr_vec, hash_vec;
+};
+
 }  // namespace
 
 static void testSha256Vector() {
@@ -109,12 +148,14 @@ static void testAirtime() {
 }
 
 static void testDutyCycle() {
-  DutyCycleLimiter d(0.01f);
-  check(d.allows(0), "initially allowed");
-  d.record(1000, 100);  // 100ms airtime at 1% => 10s gap
-  check(!d.allows(1000), "blocked right after tx");
-  check(!d.allows(5000), "still blocked mid-gap");
-  check(d.allows(1000 + 10000), "allowed after off-time");
+  // Token bucket: starts full, blocks only once drained below the reserve, then
+  // refills at the duty fraction of real time.
+  DutyCycleLimiter d(0.001f);  // budget = 3.6M * 0.001 = 3600 ms
+  check(d.allows(0), "initially allowed (full budget)");
+  d.record(0, 3600);  // spend the whole bucket
+  check(!d.allows(0), "blocked once the budget is exhausted");
+  check(!d.allows(50000), "still blocked while under-refilled");   // +50 ms budget
+  check(d.allows(200000), "allowed again after the budget refills");  // +200 ms budget
 }
 
 static void testFloodForwardAndDedup() {
@@ -159,13 +200,37 @@ static void testFloodForwardAndDedup() {
   check(radio.tx.size() == 1, "no re-transmit of duplicates");
 }
 
-static void testDutyGatingHoldsQueue() {
+static void testCompanionNoFloodForward() {
+  VirtualClock clk;
+  FakeRadio radio;
+  uint8_t bpub[proto::PUB_KEY_SIZE];
+  for (size_t i = 0; i < sizeof(bpub); i++) bpub[i] = uint8_t(0xB0 + i);
+  RadioConfig cfg;
+  Dispatcher disp(&radio, &clk, bpub, cfg);
+  disp.setDuty(1.0f);
+  disp.setAllowFloodForward(false);  // MeshCore companion default (client_repeat == 0)
+  CapturingSink sink;
+  disp.subscribe(&sink);
+
+  Packet original = makeFlood("hello mesh");
+  radio.inject(wireOf(original));
+
+  disp.loop();
+  check(sink.delivered == 1, "packet delivered to sink");
+  check(disp.queueDepth() == 0, "companion does not queue flood forward");
+  check(radio.tx.empty(), "companion does not transmit flood forward");
+}
+
+// Back-to-back interactive sends must not be throttled by the airtime budget:
+// the bucket starts full and a couple of small packets barely dent it. Guards
+// the regression where a second trace/message was blocked for tens of seconds
+// after the first (the old per-packet off-time lockout).
+static void testInteractiveSendsNotBlocked() {
   VirtualClock clk;
   FakeRadio radio;
   uint8_t pub[proto::PUB_KEY_SIZE] = {0};
   RadioConfig cfg;
-  Dispatcher disp(&radio, &clk, pub, cfg);
-  disp.setDuty(0.01f);
+  Dispatcher disp(&radio, &clk, pub, cfg);  // default ~50% airtime budget
 
   disp.send(makeFlood("one"));
   disp.loop();
@@ -173,11 +238,55 @@ static void testDutyGatingHoldsQueue() {
 
   disp.send(makeFlood("two"));
   disp.loop();
-  check(radio.tx.size() == 1, "second send held by duty cycle");
+  check(radio.tx.size() == 2, "second back-to-back send is not blocked");
 
-  clk.advance(60000);  // well past the off-time
+  disp.send(makeFlood("three"));
   disp.loop();
-  check(radio.tx.size() == 2, "held packet transmits after off-time");
+  check(radio.tx.size() == 3, "third back-to-back send is not blocked");
+}
+
+// A TRACE packet is forwarded by a node whose hash is the next routed hop (it
+// appends its own SNR and rebroadcasts), and is surfaced to the trace observer
+// once every listed hop has been traversed. Mirrors MeshCore Mesh::onRecvPacket.
+static void testTracePath() {
+  VirtualClock clk;
+  FakeRadio radio;
+  uint8_t self[proto::PUB_KEY_SIZE];
+  for (size_t i = 0; i < sizeof(self); i++) self[i] = uint8_t(0xA0 + i);
+  RadioConfig cfg;
+  Dispatcher disp(&radio, &clk, self, cfg);
+  disp.setDuty(1.0f);
+  CapturingTrace tr;
+  disp.setTraceObserver(&tr);
+
+  // 1. We are the next hop: append our SNR (5.0*4 = 20 q4) and retransmit.
+  std::vector<uint8_t> hashes = {self[0], 0x42};  // hop0 = us, hop1 = another node
+  Packet fresh = makeTrace(0x11223344, 0x55667788, 0x00, hashes, {});
+  radio.inject(wireOf(fresh));
+  disp.loop();         // handleTrace schedules the forward
+  clk.advance(2000);   // past the retransmit delay
+  disp.loop();         // transmit it
+  check(tr.calls == 0, "trace not completed at an intermediate hop");
+  check(radio.tx.size() == 1, "trace hop retransmitted");
+  Packet fwd;
+  check(fwd.readFrom(radio.tx.front().data(), radio.tx.front().size()), "forwarded trace parses");
+  check(fwd.pathHashCount() == 1, "one SNR appended by this hop");
+  check(fwd.path[0] == 20, "appended SNR is our q4 RX SNR");
+  check(fwd.payload_len == fresh.payload_len, "routed hashes (payload) unchanged on forward");
+
+  // 2. All hops traversed (snr_count << path_sz >= hash_len): surface to the app.
+  radio.tx.clear();
+  std::vector<uint8_t> done_hashes = {0x42, 0x43};
+  std::vector<uint8_t> done_snrs = {12, 16};
+  Packet done = makeTrace(0xAABBCCDD, 0x99887766, 0x00, done_hashes, done_snrs);
+  radio.inject(wireOf(done));
+  disp.loop();
+  check(tr.calls == 1, "completed trace surfaced to observer");
+  check(tr.tag == 0xAABBCCDD && tr.auth == 0x99887766, "tag/auth preserved");
+  check(tr.hash_vec == done_hashes, "routed hashes preserved");
+  check(tr.snr_vec == done_snrs, "per-hop SNRs preserved");
+  check(tr.final_snr == 20, "final SNR is this node's RX SNR (q4)");
+  check(radio.tx.empty(), "completed trace is not retransmitted");
 }
 
 int main() {
@@ -185,7 +294,9 @@ int main() {
   testAirtime();
   testDutyCycle();
   testFloodForwardAndDedup();
-  testDutyGatingHoldsQueue();
+  testCompanionNoFloodForward();
+  testInteractiveSendsNotBlocked();
+  testTracePath();
   std::printf("all kernel runtime tests passed\n");
   return 0;
 }

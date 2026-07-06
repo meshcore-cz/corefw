@@ -34,7 +34,11 @@ class MessageReceiver {
     virtual void onChannelMessage(uint8_t channel_idx, uint32_t ts, uint8_t path_len,
                                   int8_t snr_q4, const char* channel_name, const char* text) = 0;
     // A verified advert; is_new is true when the contact was just auto-added.
-    virtual void onAdvert(const ContactInfo& contact, bool is_new) { (void)contact; (void)is_new; }
+    // encoded_path_len is the wire path_len byte; path_bytes may be null.
+    virtual void onAdvert(const ContactInfo& contact, bool is_new, uint8_t encoded_path_len = 0,
+                          const uint8_t* path_bytes = nullptr, uint32_t recv_ts = 0) {
+      (void)contact; (void)is_new; (void)encoded_path_len; (void)path_bytes; (void)recv_ts;
+    }
   };
 
   MessageReceiver(CompanionState& s, Sink& sink) : s_(s), sink_(sink) {}
@@ -110,26 +114,39 @@ class MessageReceiver {
         std::memcmp(id.pub_key, s_.self.pub_key, proto::PUB_KEY_SIZE) == 0) {
       return true;  // our own advert echoed back
     }
+
+    auto notifyDiscovered = [&](ContactInfo& ci, bool is_new) {
+      sink_.onAdvert(ci, is_new, uint8_t(pkt.path_len), pkt.path, timestamp);
+    };
+    auto populateContact = [&](ContactInfo& c) {
+      std::memcpy(c.id.pub_key, id.pub_key, proto::PUB_KEY_SIZE);
+      std::strncpy(c.name, ad.name, sizeof(c.name) - 1);
+      c.name[sizeof(c.name) - 1] = 0;
+      c.type = ad.type;
+      c.out_path_len = OUT_PATH_UNKNOWN;
+      c.last_advert_timestamp = timestamp;
+    };
+
     ContactInfo* existing = s_.lookupContact(id.pub_key, proto::PUB_KEY_SIZE);
     bool is_new = existing == nullptr;
     if (is_new) {
-      if (!s_.manual_add_contacts) {  // auto-add unless the app manages contacts
+      if (s_.manual_add_contacts) {
         ContactInfo c;
-        std::memcpy(c.id.pub_key, id.pub_key, proto::PUB_KEY_SIZE);
-        std::strncpy(c.name, ad.name, sizeof(c.name) - 1);
-        c.name[sizeof(c.name) - 1] = 0;
-        c.type = ad.type;
-        c.out_path_len = OUT_PATH_UNKNOWN;
-        c.last_advert_timestamp = timestamp;
-        if (!s_.addContact(c)) return true;  // table full
-        existing = &s_.contacts[s_.num_contacts - 1];
-      } else {
-        return true;  // app will add it explicitly
+        populateContact(c);
+        notifyDiscovered(c, true);
+        return true;
       }
+      ContactInfo c;
+      populateContact(c);
+      if (!s_.addContact(c)) {
+        notifyDiscovered(c, true);
+        return true;
+      }
+      existing = &s_.contacts[s_.num_contacts - 1];
     } else {
       existing->last_advert_timestamp = timestamp;
     }
-    sink_.onAdvert(*existing, is_new);
+    notifyDiscovered(*existing, is_new);
     return true;
   }
 

@@ -34,29 +34,54 @@ inline uint32_t timeOnAirMs(size_t payload_len, float bandwidth_khz, uint8_t sf,
 }
 
 // DutyCycleLimiter enforces a single sub-band's duty cycle across time.
+// Airtime budget — MeshCore's token-bucket duty-cycle model (Dispatcher.cpp).
+//
+// A bucket holding up to a 1-hour window's worth of transmit-time refills at the
+// duty fraction of real time; each transmission spends its airtime from it, and
+// a send is held only when the bucket falls below a small reserve. So ordinary
+// interactive traffic (messages, traces, the occasional advert) never blocks —
+// the earlier per-packet "off-time" lockout wrongly stalled every send for ~100x
+// its airtime — while sustained flooding is still throttled to the duty fraction.
+// The reference default is ~50% (a loose sanity cap, not strict ETSI); a stricter
+// region/board can lower it.
 class DutyCycleLimiter {
  public:
-  explicit DutyCycleLimiter(float duty_fraction = 0.01f) : duty_(duty_fraction) {}
+  explicit DutyCycleLimiter(float duty_fraction = 0.5f) { setDuty(duty_fraction); }
 
-  void setDuty(float fraction) { duty_ = fraction; }
-
-  // allows reports whether a transmission may start now.
-  bool allows(uint32_t now_ms) const { return int32_t(now_ms - next_allowed_ms_) >= 0; }
-
-  // record accounts for a transmission of `airtime_ms` starting at `now_ms`,
-  // scheduling the earliest next permitted transmission.
-  void record(uint32_t now_ms, uint32_t airtime_ms) {
-    // Next allowed = end-of-tx + off-time, where off = airtime*(1/duty - 1),
-    // i.e. next_allowed = now + airtime/duty.
-    const uint32_t gap = uint32_t(double(airtime_ms) / (duty_ > 0 ? duty_ : 1.0));
-    next_allowed_ms_ = now_ms + gap;
+  // Set the sustained duty fraction (0..1). Resets the bucket to full.
+  void setDuty(float fraction) {
+    duty_ = fraction > 1.0f ? 1.0f : (fraction > 0.0f ? fraction : 0.0001f);
+    max_budget_ms_ = uint32_t(double(kWindowMs) * duty_);
+    budget_ms_ = max_budget_ms_;
   }
 
-  uint32_t nextAllowedMs() const { return next_allowed_ms_; }
+  // allows reports whether a transmission may start now (bucket above reserve).
+  bool allows(uint32_t now_ms) const { return refilled(now_ms) >= kReserveMs; }
+
+  // record accounts for a transmission of `airtime_ms` completing at `now_ms`,
+  // refilling for elapsed time then spending the airtime from the bucket.
+  void record(uint32_t now_ms, uint32_t airtime_ms) {
+    uint32_t b = refilled(now_ms);
+    budget_ms_ = (b > airtime_ms) ? (b - airtime_ms) : 0;
+    last_ms_ = now_ms;
+  }
+
+  // Current bucket level (ms of airtime) at `now_ms`, for diagnostics/tests.
+  uint32_t budgetMs(uint32_t now_ms) const { return refilled(now_ms); }
 
  private:
-  float duty_;
-  uint32_t next_allowed_ms_ = 0;
+  uint32_t refilled(uint32_t now_ms) const {
+    const uint64_t add = uint64_t(double(uint32_t(now_ms - last_ms_)) * duty_);
+    const uint64_t b = uint64_t(budget_ms_) + add;
+    return b > max_budget_ms_ ? max_budget_ms_ : uint32_t(b);
+  }
+
+  static constexpr uint32_t kWindowMs = 3600000;  // 1-hour budget window
+  static constexpr uint32_t kReserveMs = 100;     // min bucket level before a TX
+  float duty_ = 0.5f;
+  uint32_t max_budget_ms_ = 1800000;
+  uint32_t budget_ms_ = 1800000;
+  uint32_t last_ms_ = 0;
 };
 
 }  // namespace corefw

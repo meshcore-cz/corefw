@@ -51,6 +51,12 @@ class RadioDriver {
   virtual float lastSNR() const { return 0.0f; }
   virtual int lastRSSI() const { return 0; }
 
+  // Background work (noise-floor sampling, etc.). Called from the dispatcher loop.
+  virtual void loop() {}
+
+  // Calibrated noise floor in dBm, or 0 if not yet measured.
+  virtual int16_t noiseFloorDbm() const { return 0; }
+
   // Put the radio into its lowest-power state (kernel/power-coordinator driven).
   virtual void sleep() {}
 };

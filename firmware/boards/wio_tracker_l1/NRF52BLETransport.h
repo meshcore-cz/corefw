@@ -15,6 +15,8 @@ namespace corefw::board {
 
 class NRF52BLETransport : public companion::CompanionTransport {
  public:
+  static constexpr int kSendQueueDepth = 8;
+
   // begin advertises as `name` and starts the Nordic UART service. When
   // pin != 0, LESC passkey pairing is required.
   void begin(const char* name, uint32_t pin = 0) {
@@ -30,8 +32,29 @@ class NRF52BLETransport : public companion::CompanionTransport {
 
   bool connected() const override { return Bluefruit.connected() > 0; }
 
-  void write(const uint8_t* data, size_t len) override {
-    bleuart_.write(data, len);
+  bool write(const uint8_t* data, size_t len) override {
+    if (len > companion::MAX_FRAME_SIZE) return false;
+    if (!connected() || len == 0) return false;
+    if (send_count_ >= kSendQueueDepth) return false;
+    std::memcpy(send_queue_[send_tail_], data, len);
+    send_len_[send_tail_] = len;
+    send_tail_ = (send_tail_ + 1) % kSendQueueDepth;
+    send_count_++;
+    return true;
+  }
+
+  void poll() override {
+    if (send_count_ == 0 || !connected()) return;
+    size_t len = send_len_[send_head_];
+    size_t written = bleuart_.write(send_queue_[send_head_], len);
+    if (written == len) {
+      send_head_ = (send_head_ + 1) % kSendQueueDepth;
+      send_count_--;
+    } else if (written > 0) {
+      // Drop corrupted partial frame, matching MeshCore SerialBLEInterface.
+      send_head_ = (send_head_ + 1) % kSendQueueDepth;
+      send_count_--;
+    }
   }
 
   size_t read(uint8_t* buf, size_t cap) override {
@@ -61,6 +84,11 @@ class NRF52BLETransport : public companion::CompanionTransport {
   }
 
   BLEUart bleuart_;
+  uint8_t send_queue_[kSendQueueDepth][companion::MAX_FRAME_SIZE + 3] = {};
+  size_t send_len_[kSendQueueDepth] = {};
+  int send_head_ = 0;
+  int send_tail_ = 0;
+  int send_count_ = 0;
 };
 
 }  // namespace corefw::board

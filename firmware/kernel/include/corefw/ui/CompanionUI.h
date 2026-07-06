@@ -16,7 +16,7 @@ namespace corefw::ui {
 
 class CompanionUI {
  public:
-  enum class Page : uint8_t { Home = 0, Recent, Radio, Bluetooth, Advert, Shutdown, Count };
+  enum class Page : uint8_t { Home = 0, Recent, Radio, Gps, Bluetooth, Advert, Shutdown, Count };
 
   void begin(uint32_t now_ms) {
     started_ms_ = now_ms;
@@ -37,6 +37,23 @@ class CompanionUI {
     cr_ = cr;
     tx_dbm_ = tx_dbm;
     dirty_ = true;
+  }
+  void setNoiseFloorDbm(int16_t dbm) {
+    if (noise_floor_dbm_ != dbm) {
+      noise_floor_dbm_ = dbm;
+      dirty_ = true;
+    }
+  }
+  void setGps(bool enabled, bool fix, uint8_t sats, int32_t lat_e6, int32_t lon_e6) {
+    if (gps_enabled_ != enabled || gps_fix_ != fix || gps_sats_ != sats ||
+        gps_lat_e6_ != lat_e6 || gps_lon_e6_ != lon_e6) {
+      gps_enabled_ = enabled;
+      gps_fix_ = fix;
+      gps_sats_ = sats;
+      gps_lat_e6_ = lat_e6;
+      gps_lon_e6_ = lon_e6;
+      dirty_ = true;
+    }
   }
   void setStatus(const char* s) { copy(status_, s, sizeof(status_)); dirty_ = true; }
   void setLastMessage(const char* s) { copy(last_msg_, s, sizeof(last_msg_)); dirty_ = true; }
@@ -165,6 +182,7 @@ class CompanionUI {
       case Page::Home: renderHome(d); break;
       case Page::Recent: renderRecent(d, now_s); break;
       case Page::Radio: renderRadio(d); break;
+      case Page::Gps: renderGps(d); break;
       case Page::Bluetooth: renderBluetooth(d); break;
       case Page::Advert: renderAdvert(d); break;
       case Page::Shutdown: renderShutdown(d); break;
@@ -236,7 +254,43 @@ class CompanionUI {
     std::snprintf(tmp, sizeof(tmp), "TX: %ddBm", int(tx_dbm_));
     d.print(tmp);
     d.setCursor(0, 53);
-    d.print("Noise floor: n/a");
+    if (noise_floor_dbm_ == 0) {
+      d.print("Noise floor: n/a");
+    } else {
+      std::snprintf(tmp, sizeof(tmp), "Noise floor: %d", int(noise_floor_dbm_));
+      d.print(tmp);
+    }
+  }
+
+  void renderGps(Display& d) const {
+    char tmp[48];
+    d.setColor(Display::YELLOW);
+    d.setTextSize(1);
+    d.setCursor(0, 20);
+    if (!gps_enabled_) {
+      d.print("GPS: off");
+      return;
+    }
+    if (!gps_fix_) {
+      std::snprintf(tmp, sizeof(tmp), "GPS: searching (%u)", unsigned(gps_sats_));
+      d.print(tmp);
+      return;
+    }
+    std::snprintf(tmp, sizeof(tmp), "GPS fix - %u sats", unsigned(gps_sats_));
+    d.print(tmp);
+    // Signed micro-degrees printed as a decimal degree value.
+    d.setCursor(0, 34);
+    printLatLon(d, tmp, sizeof(tmp), "Lat", gps_lat_e6_);
+    d.setCursor(0, 45);
+    printLatLon(d, tmp, sizeof(tmp), "Lon", gps_lon_e6_);
+  }
+
+  static void printLatLon(Display& d, char* tmp, size_t cap, const char* label, int32_t e6) {
+    int32_t whole = e6 / 1000000;
+    int32_t frac = e6 % 1000000;
+    if (frac < 0) frac = -frac;
+    std::snprintf(tmp, cap, "%s: %ld.%06ld", label, long(whole), long(frac));
+    d.print(tmp);
   }
 
   void renderBluetooth(Display& d) const {
@@ -359,6 +413,12 @@ class CompanionUI {
   uint8_t sf_ = 11;
   uint8_t cr_ = 5;
   int8_t tx_dbm_ = 22;
+  int16_t noise_floor_dbm_ = 0;
+  bool gps_enabled_ = false;
+  bool gps_fix_ = false;
+  uint8_t gps_sats_ = 0;
+  int32_t gps_lat_e6_ = 0;
+  int32_t gps_lon_e6_ = 0;
   uint32_t started_ms_ = 0;
   uint32_t alert_expiry_ms_ = 0;
   Page page_ = Page::Home;

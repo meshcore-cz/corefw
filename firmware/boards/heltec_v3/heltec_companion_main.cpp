@@ -1,18 +1,18 @@
-// Wio Tracker L1 companion — target entrypoint.
+// Heltec WiFi LoRa 32 V3 companion — target entrypoint.
 //
-// TARGET-ONLY reference wiring (COREFW_TARGET && NRF52_PLATFORM). This is the
-// concrete Arduino setup()/loop() that turns a composed corefw image into a
-// working Wio Tracker L1 companion: SX1262 radio + BLE transport + SH1106 OLED +
-// piezo buzzer. The kernel owns scheduling/power; this file only constructs the
-// board peripherals and hands them to the CompanionModule the generated
-// composition root registered.
+// TARGET-ONLY reference wiring (COREFW_TARGET && ESP32_PLATFORM). The concrete
+// Arduino setup()/loop() that turns a composed corefw image into a working
+// Heltec V3 companion: SX1262 radio + SSD1306 OLED + a USB-serial or NimBLE
+// transport to the phone/desktop app.
 //
-// It cannot be built by the host test suite (it needs the Adafruit nRF52 core,
-// RadioLib and Bluefruit); the portable logic it drives is covered by the host
-// tests under firmware/kernel/*.
+// This is the ESP32-S3 sibling of wio_companion_main.cpp. Because the Heltec has
+// no external QSPI flash, storage is a single internal LittleFS volume, and the
+// nRF52-only freeze diagnostics (watchdog/GPREGRET crumbs/HardFault capture) are
+// dropped — the ESP32 has its own reset-reason and task watchdog. The portable
+// logic this file drives is covered by the host tests under firmware/kernel/*.
 #include <corefw/Kernel.h>
 
-#if defined(COREFW_TARGET) && defined(NRF52_PLATFORM)
+#if defined(COREFW_TARGET) && defined(ESP32_PLATFORM)
 
 #include <Arduino.h>
 
@@ -23,17 +23,14 @@
 
 #include <corefw/companion/Storage.h>
 
-#include "NRF52BLETransport.h"
-#include "NRF52Diag.h"
-#include "NRF52FileStore.h"
-#include "NRF52Gps.h"
-#include "NRF52USBSerialTransport.h"
-// These live outside the kernel include root; the generated build adds -I firmware.
-#include <drivers/buzzer/ArduinoBuzzer.h>
-#include <drivers/display/sh1106/SH1106Display.h>
+#include "ESP32BLETransport.h"
+#include "ESP32FileStore.h"
+#include "ESP32USBSerialTransport.h"
+// Lives outside the kernel include root; the generated build adds -I firmware.
+#include <drivers/display/ssd1306/SSD1306Display.h>
 
-#ifndef PIN_BUZZER
-#define PIN_BUZZER 12
+#ifndef BLE_DEVICE_NAME
+#define BLE_DEVICE_NAME "corefw-heltec"
 #endif
 #ifndef BLE_PIN_CODE
 #define BLE_PIN_CODE 0
@@ -50,6 +47,8 @@ class ArduinoClock : public Clock {
 };
 
 // SoftRTC keeps wall-clock seconds; the app sets it via CMD_SET_DEVICE_TIME.
+// The Heltec V3 has no battery-backed RTC, so time is lost across resets until
+// the app sets it again.
 class SoftRTC {
  public:
   uint32_t now() const { return base_ + (::millis() - set_at_) / 1000; }
@@ -66,42 +65,13 @@ class SoftRTC {
 // Globals wired in setup().
 static ArduinoClock g_clock;
 static SoftRTC g_rtc;
-static board::NRF52BLETransport g_ble;
-static board::NRF52USBSerialTransport g_usb;
-static ui::SH1106Display g_display;
-static ui::ArduinoBuzzer g_buzzer(PIN_BUZZER);
+static board::ESP32BLETransport g_ble;
+static board::ESP32USBSerialTransport g_usb;
+static ui::SSD1306Display g_display;
 static Dispatcher* g_dispatcher = nullptr;
 static Kernel g_kernel;
 static proto::LocalIdentity g_identity;
-static board::NRF52FileStore g_fs;
-static board::NRF52Gps g_gps;
-static board::Watchdog g_wdt;
-static board::SerialDebug g_dbg;
-
-// Fault record lives in .noinit so its contents survive the reset that follows a
-// hardfault; the boot banner reports the captured PC on the next start.
-namespace corefw::board {
-__attribute__((section(".noinit"))) FaultRecord g_fault_record;
-}  // namespace corefw::board
-
-// Cortex-M hardfault trampoline: pass the exception stack frame (MSP or PSP) to
-// the capture routine, which records the faulting PC and reboots.
-extern "C" void corefw_hardfault_capture(uint32_t* sp) {
-  board::g_fault_record.magic = board::kFaultMagic;
-  board::g_fault_record.pc = sp[6];   // stacked PC
-  board::g_fault_record.lr = sp[5];   // stacked LR
-  board::g_fault_record.cfsr = SCB->CFSR;
-  NVIC_SystemReset();
-}
-extern "C" __attribute__((naked)) void HardFault_Handler(void) {
-  __asm volatile(
-      " tst lr, #4                          \n"
-      " ite eq                              \n"
-      " mrseq r0, msp                       \n"
-      " mrsne r0, psp                       \n"
-      " ldr r1, =corefw_hardfault_capture   \n"
-      " bx r1                               \n");
-}
+static board::ESP32FileStore g_fs;
 static companion::PersistentStore g_store(g_fs);
 static CompanionModule* g_companion = nullptr;  // resolved in setup()
 static companion::CompanionTransport* g_transport = nullptr;
@@ -138,7 +108,7 @@ static RadioConfig makeRadioConfig(const companion::CompanionState& state) {
 // CompanionHost implementation: device services (RTC, battery, persistence).
 // Persistence flows through the byte-compatible PersistentStore, so writes land
 // in the exact MeshCore file formats.
-class WioCompanionHost : public companion::CompanionHost {
+class HeltecCompanionHost : public companion::CompanionHost {
  public:
   uint32_t rtcNow() override { return g_rtc.now(); }
   void setRtc(uint32_t s) override { g_rtc.set(s); }
@@ -148,7 +118,7 @@ class WioCompanionHost : public companion::CompanionHost {
   uint32_t storageUsedKb() override { return g_fs.usedKb(); }
   uint32_t storageTotalKb() override { return g_fs.totalKb(); }
   const char* manufacturerName() override {
-    return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Seeed Studio";
+    return g_kernel.board() ? g_kernel.board()->manufacturerName() : "Heltec";
   }
   void savePrefs() override { if (g_companion) g_store.savePrefs(g_companion->state()); }
   void saveContacts() override { if (g_companion) g_store.saveContacts(g_companion->state()); }
@@ -173,11 +143,10 @@ class WioCompanionHost : public companion::CompanionHost {
     RadioDriver* radio = g_kernel.board() ? g_kernel.board()->radio() : nullptr;
     return radio ? radio->noiseFloorDbm() : 0;
   }
-  bool gpsEnabled() const override {
-    return g_companion && g_companion->state().gps_enabled != 0 && g_gps.started();
-  }
-  bool gpsHasFix() const override { return g_gps.hasFix(); }
-  uint8_t gpsSatellites() const override { return g_gps.satellites(); }
+  // The base Heltec V3 has no on-board GPS.
+  bool gpsEnabled() const override { return false; }
+  bool gpsHasFix() const override { return false; }
+  uint8_t gpsSatellites() const override { return 0; }
   int advertPath(const uint8_t* pub_key, uint32_t& recv_ts, uint8_t* path) override {
     if (!g_companion) return -1;
     return g_companion->advertPath(pub_key, recv_ts, path);
@@ -191,18 +160,18 @@ class WioCompanionHost : public companion::CompanionHost {
   }
 };
 
-static WioCompanionHost g_host;
+static HeltecCompanionHost g_host;
 
-// set the route bits on a packet built by the datagram builders (which leave
+// Set the route bits on a packet built by the datagram builders (which leave
 // route = 0), preserving the payload type.
 static void setRoute(proto::Packet& pkt, uint8_t route) {
   pkt.header = uint8_t((pkt.header & ~proto::PH_ROUTE_MASK) | (route & proto::PH_ROUTE_MASK));
 }
 
-// WioMeshSender bridges the companion command handler to the radio scheduler.
+// HeltecMeshSender bridges the companion command handler to the radio scheduler.
 // Flood packets get ROUTE_FLOOD; packets with a known return path go ROUTE_DIRECT
 // with the path attached. The Dispatcher owns airtime/duty-cycle scheduling.
-class WioMeshSender : public companion::MeshSender {
+class HeltecMeshSender : public companion::MeshSender {
  public:
   int sendToContact(proto::Packet& pkt, const companion::ContactInfo& c,
                     uint32_t& est_timeout) override {
@@ -253,7 +222,7 @@ class WioMeshSender : public companion::MeshSender {
     const companion::CompanionState& st = g_companion->state();
     proto::AdvertData ad;
     ad.type = proto::ADV_TYPE_CHAT;
-    // Advertise our node name so peers see it (previously an empty advert).
+    // Advertise our node name so peers see it.
     std::strncpy(ad.name, st.node_name, sizeof(ad.name) - 1);
     ad.name[sizeof(ad.name) - 1] = 0;
     // Share location only when the user opted in and we actually have a fix.
@@ -271,7 +240,7 @@ class WioMeshSender : public companion::MeshSender {
     return true;
   }
   uint32_t rtcNowUnique() override { return g_rtc.now() + (seq_++ & 0x3); }
-  uint32_t random32() override { rng_ = rng_ * 1664525u + 1013904223u; return rng_; }
+  uint32_t random32() override { return esp_random(); }
 
  private:
   static void applyPath(proto::Packet& pkt, const uint8_t* path, uint8_t path_len) {
@@ -280,47 +249,12 @@ class WioMeshSender : public companion::MeshSender {
     memcpy(pkt.path, path, n);
   }
   uint32_t seq_ = 0;
-  uint32_t rng_ = 0xC0FFEE11;
 };
 
-static WioMeshSender g_sender;
-
-// Minimal Wio joystick handling for the MeshCore-style companion pages. The
-// button pins are active-low in the board variant.
-struct ButtonEdge {
-  uint8_t pin;
-  bool last = true;
-  uint32_t changed_at = 0;
-  bool began = false;
-
-  void begin() {
-    pinMode(pin, INPUT_PULLUP);
-    last = digitalRead(pin);
-    changed_at = millis();
-    began = true;
-  }
-
-  bool pressed() {
-    if (!began) begin();
-    bool now = digitalRead(pin);
-    uint32_t t = millis();
-    if (now != last && t - changed_at > 40) {
-      last = now;
-      changed_at = t;
-      return now == LOW;
-    }
-    return false;
-  }
-};
-
-#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
-static ButtonEdge g_btn_left{PIN_BUTTON4};
-static ButtonEdge g_btn_right{PIN_BUTTON5};
-static ButtonEdge g_btn_enter{PIN_BUTTON6};
-#endif
+static HeltecMeshSender g_sender;
 
 // findCompanion locates the CompanionModule the generated composition
-// registered, so we can attach the board's transport/display/buzzer to it.
+// registered, so we can attach the board's transport/display to it.
 static CompanionModule* findCompanion() {
   for (int i = 0; i < g_kernel.moduleCount(); ++i) {
     Module* m = g_kernel.module(i);
@@ -330,9 +264,6 @@ static CompanionModule* findCompanion() {
 }
 
 static void showStage(const char* line1, const char* line2 = "") {
-  // Serial breadcrumb: the last stage printed before silence is where a freeze
-  // happened (no-op on USB companion builds, where the CDC carries protocol).
-  g_dbg.log("stage: %s %s", line1, line2);
   if (!g_display.isOn()) return;
   g_display.startFrame();
   g_display.setTextSize(1);
@@ -344,78 +275,62 @@ static void showStage(const char* line1, const char* line2 = "") {
   g_display.endFrame();
 }
 
-// Render the previous boot's crash info to the OLED. This is the only diagnostic
-// visible on a USB-companion build (where the serial console is the protocol
-// channel), so it holds long enough to read or photograph.
-static void showFreezeDiag() {
-  if (!g_display.isOn()) return;
-  char l[40];
-  g_display.startFrame();
-  g_display.setTextSize(1);
-  g_display.setColor(ui::Display::LIGHT);
-  g_display.setCursor(0, 0);
-  g_display.print("FREEZE DIAG");
-  g_display.setCursor(0, 12);
-  g_display.print(board::ResetReason::text());
-  g_display.setCursor(0, 24);
-  std::snprintf(l, sizeof(l), "at: %s", board::crumbName(board::bootCrumb()));
-  g_display.print(l);
-  if (board::g_fault_record.magic == board::kFaultMagic) {
-    g_display.setCursor(0, 36);
-    std::snprintf(l, sizeof(l), "pc %08lx", (unsigned long)board::g_fault_record.pc);
-    g_display.print(l);
-    g_display.setCursor(0, 48);
-    std::snprintf(l, sizeof(l), "cfsr %08lx", (unsigned long)board::g_fault_record.cfsr);
-    g_display.print(l);
+// The Heltec V3 has a single user button (PRG, GPIO0, active-low). One button
+// drives the MeshCore-style companion pages: a short press advances to the next
+// page, a long press (>=500 ms held) goes back. Debounced on press and release.
+struct UserButton {
+  uint8_t pin;
+  bool down = false;         // currently pressed (post-debounce)
+  uint32_t pressed_at = 0;   // millis() when the press began
+  uint32_t last_change = 0;  // debounce timestamp
+
+  void begin() {
+    pinMode(pin, INPUT_PULLUP);
+    down = (digitalRead(pin) == LOW);
+    last_change = millis();
   }
-  g_display.endFrame();
-}
+
+  // Returns +1 on a short-press release, -1 on a long-press release, else 0.
+  int poll() {
+    bool raw = (digitalRead(pin) == LOW);
+    uint32_t t = millis();
+    if (raw == down || t - last_change < 40) return 0;  // no change / bounce
+    last_change = t;
+    down = raw;
+    if (down) {  // just pressed
+      pressed_at = t;
+      return 0;
+    }
+    return (t - pressed_at >= 500) ? -1 : +1;  // released: long vs short
+  }
+};
+
+#if defined(PIN_USER_BTN)
+static UserButton g_btn{PIN_USER_BTN};
+#endif
 
 void setup() {
-  // Snapshot why we rebooted before anything else touches the register — a
-  // "WATCHDOG" reason here is the signature of the freeze we are chasing.
-  board::captureBoot();  // snapshot reset reason + last crumb before overwriting
-  board::crumb(board::CRUMB_SETUP);
-
   // 1. Bring up the board (buses, radio, power rails) via the composition root.
   corefw_compose(g_kernel);
   if (g_kernel.board()) g_kernel.board()->begin();
   g_companion = findCompanion();
 
-  // Serial debug console: usable whenever the USB CDC is not the companion
-  // protocol transport (i.e. BLE builds), so it never corrupts framing.
-  bool usb_companion =
-      g_companion && g_companion->transportKind() == CompanionTransportKind::USB;
-  g_dbg.begin(/*enabled=*/!usb_companion);
-
-  // Bring up the display early so every potentially blocking startup stage has
-  // a visible breadcrumb on the OLED.
+  // Bring up the display early so startup stages are visible on the OLED.
   bool display_ok = g_display.begin();
   if (display_ok) {
-    if (board::crashedLastBoot()) {
-      showFreezeDiag();  // reset reason + crumb + fault PC — hold to read it
-      delay(6000);
-    }
-    showStage("corefw display", "Wio Tracker L1");
+    showStage("corefw display", "Heltec V3");
     delay(500);
   }
-  board::g_fault_record.magic = 0;  // consumed by serial + OLED; clear for next boot
 
-  // 2. Mount the existing filesystem (never formats) and load identity, prefs,
-  //    contacts and channels in MeshCore's on-flash formats. A device reflashed
-  //    from MeshCore keeps its identity (mesh address) and data. Only a fresh
-  //    device generates a new identity here (seeded from the hardware RNG).
-  // Storage mount. The QSPI guard lives inside NRF52FileStore (an InternalFS
-  // marker file that survives any reset), so a crashing QSPI mount latches off
-  // and can never boot-loop. The crumb records that we were here for the diag.
+  // 2. Mount the internal LittleFS (never formats an existing volume) and load
+  //    identity, prefs, contacts and channels in MeshCore's on-flash formats. A
+  //    fresh device generates a new identity here, seeded from the hardware RNG.
   showStage("startup", "storage");
-  board::crumb(board::CRUMB_STORAGE_QSPI);
   g_fs.begin();
-  board::crumb(board::CRUMB_SETUP);
   if (g_companion) {
     applyProfileRadioDefaults(g_companion->state());
     uint8_t seed[proto::SEED_SIZE];
-    for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(random(256));
+    for (size_t i = 0; i < sizeof(seed); i++) seed[i] = uint8_t(esp_random());
     g_store.loadAll(g_companion->state(), seed);
     g_identity = g_companion->state().self;
   }
@@ -444,16 +359,14 @@ void setup() {
     dispatcher.setTraceObserver(g_companion);
   }
 
-  // 4. Peripherals for the companion experience.
-  showStage("startup", "buzzer");
-  g_buzzer.begin();
+  // 4. Companion transport: USB-serial (simplest, no BLE stack) or NimBLE.
   if (g_companion && g_companion->transportKind() == CompanionTransportKind::USB) {
     showStage("startup", "usb serial");
     g_usb.begin(115200);
     g_transport = &g_usb;
   } else {
     showStage("startup", "ble");
-    g_ble.begin(/*name=*/"corefw-wio", BLE_PIN_CODE);
+    g_ble.begin(BLE_DEVICE_NAME, BLE_PIN_CODE);
     g_transport = &g_ble;
   }
 
@@ -465,22 +378,6 @@ void setup() {
     comp->attachSender(&g_sender);
     comp->attachTransport(g_transport);
     comp->attachDisplay(&g_display);
-    comp->attachBuzzer(&g_buzzer);
-  }
-
-#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
-  g_btn_left.begin();
-  g_btn_right.begin();
-  g_btn_enter.begin();
-#endif
-
-  // 6. GPS: the Wio Tracker L1 has an on-board L76KB. Track our own position so
-  // it shows on-screen, feeds SELF_INFO, and can be shared in adverts. Enabled
-  // by default since the hardware is present; the app can toggle it per session.
-  if (g_companion && g_kernel.board() && g_kernel.board()->capabilities().gps) {
-    showStage("startup", "gps");
-    g_companion->state().gps_enabled = 1;
-    g_gps.begin();
   }
 
   static struct : PowerCoordinator {
@@ -491,57 +388,23 @@ void setup() {
   } power;
   showStage("startup", "kernel");
   g_kernel.begin(dispatcher, power);
-  if (g_companion) g_companion->playStartupMelody();
+#if defined(PIN_USER_BTN)
+  g_btn.begin();
+#endif
   showStage("startup", "loop");
-
-  // Arm the watchdog last, so a hang anywhere in the steady-state loop (not the
-  // one-time bring-up) trips it. 8s is comfortably longer than any legitimate
-  // loop iteration, including BLE pairing.
-  g_wdt.begin(8000);
-}
-
-// Fold GPS updates into device state: refresh our position, seed the RTC from
-// satellite time when we have no other clock, and re-advertise on the configured
-// interval so peers (and the map) see a fresh location.
-static void serviceGps(uint32_t now_ms) {
-  if (!g_companion || !g_gps.started()) return;
-  g_gps.loop();
-  if (!g_gps.hasFix()) return;
-
-  companion::CompanionState& st = g_companion->state();
-  st.lat_e6 = g_gps.latE6();
-  st.lon_e6 = g_gps.lonE6();
-
-  // The Wio has no battery-backed RTC; adopt GPS UTC once if unset.
-  uint32_t gps_time = g_gps.unixTime();
-  if (gps_time != 0 && !g_rtc.isSet()) g_rtc.set(gps_time);
-
-  // Periodic self-advert (gps_interval seconds, 0 = disabled).
-  static uint32_t last_advert_ms = 0;
-  uint32_t interval_ms = st.gps_interval * 1000u;
-  if (interval_ms != 0 && (last_advert_ms == 0 || now_ms - last_advert_ms >= interval_ms)) {
-    g_sender.sendSelfAdvert(/*flood=*/true);
-    last_advert_ms = now_ms;
-  }
 }
 
 void loop() {
   const uint32_t now = g_clock.millis();
-  g_wdt.feed();
-  g_dbg.heartbeat(now);
-  board::crumb(board::CRUMB_LOOP_RX);
   if (g_dispatcher) g_dispatcher->loop();
-  board::crumb(board::CRUMB_LOOP_GPS);
-  serviceGps(now);
-  board::crumb(board::CRUMB_LOOP_TICK);
 
   // Reflect transport connection state as kernel events, then pump the companion.
   static bool wasConnected = false;
   if (g_companion) {
-#if defined(PIN_BUTTON4) && defined(PIN_BUTTON5) && defined(PIN_BUTTON6)
-    if (g_btn_left.pressed()) g_companion->ui().prevPage();
-    if (g_btn_right.pressed()) g_companion->ui().nextPage();
-    if (g_btn_enter.pressed()) g_companion->ui().clearMessagePreview();
+#if defined(PIN_USER_BTN)
+    int b = g_btn.poll();
+    if (b > 0) g_companion->ui().nextPage();
+    else if (b < 0) g_companion->ui().prevPage();
 #endif
     bool nowConnected = g_transport ? g_transport->connected() : false;
     if (nowConnected != wasConnected) {
@@ -552,7 +415,6 @@ void loop() {
     }
     g_companion->tick(now);
   }
-  board::crumb(board::CRUMB_LOOP_IDLE);
 }
 
-#endif  // COREFW_TARGET && NRF52_PLATFORM
+#endif  // COREFW_TARGET && ESP32_PLATFORM

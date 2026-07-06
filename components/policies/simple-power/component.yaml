@@ -5,7 +5,7 @@ status: official
 license: MIT
 description: Baseline power policy with low/critical battery thresholds and TX power
 maintainers:
-  - jan.stransky@arnal.cz
+  - tree@tree.fail
 
 compatibility:
   platform: ">=0.1 <0.2"

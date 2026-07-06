@@ -13,6 +13,7 @@
 #include <corefw/companion/State.h>
 #include <corefw/protocol/Datagram.h>
 #include <corefw/protocol/Wire.h>
+#include <corefw/runtime/Airtime.h>  // timeOnAirMs, for the trace round-trip estimate
 
 #include <cstring>
 
@@ -70,9 +71,17 @@ class CompanionHost {
   }
   virtual void radioStats(int16_t& noise_floor, int8_t& last_rssi, int8_t& last_snr_q4,
                           uint32_t& tx_air_s, uint32_t& rx_air_s) {
-    noise_floor = 0; last_rssi = 0; last_snr_q4 = 0; tx_air_s = 0; rx_air_s = 0;
+    noise_floor = radioNoiseFloorDbm();
+    last_rssi = 0; last_snr_q4 = 0; tx_air_s = 0; rx_air_s = 0;
   }
+  virtual int16_t radioNoiseFloorDbm() const { return 0; }
   virtual void packetStats(uint32_t out[7]) { std::memset(out, 0, 7 * sizeof(uint32_t)); }
+
+  // GPS status for the on-screen indicator. Boards without GPS keep the default
+  // (disabled); positions live in CompanionState (lat_e6/lon_e6).
+  virtual bool gpsEnabled() const { return false; }
+  virtual bool gpsHasFix() const { return false; }
+  virtual uint8_t gpsSatellites() const { return 0; }
 
   // GET_ADVERT_PATH: return path length + recv timestamp for a pubkey prefix, or
   // -1 if unknown.
@@ -172,6 +181,28 @@ class CommandHandler {
     }
   }
 
+  bool contactSyncActive() const { return s_.contact_sync_active; }
+
+  // Send at most one CONTACT (or END_OF_CONTACTS) per call — matches
+  // MyMesh::checkSerialInterface() while the contacts iterator is running.
+  void pumpContactSync(FrameWriter& out) {
+    if (!s_.contact_sync_active) return;
+    while (s_.contact_sync_idx < s_.num_contacts) {
+      ContactInfo& c = s_.contacts[s_.contact_sync_idx++];
+      if (c.lastmod < s_.contact_sync_since) continue;
+      uint8_t f[160];
+      size_t n = writeContactRespFrame(RESP_CODE_CONTACT, c, f);
+      out.writeFrame(f, n);
+      if (c.lastmod > s_.contact_sync_most_recent) s_.contact_sync_most_recent = c.lastmod;
+      return;
+    }
+    uint8_t endf[5];
+    endf[0] = RESP_CODE_END_OF_CONTACTS;
+    proto::putU32LE(endf, 1, s_.contact_sync_most_recent);
+    out.writeFrame(endf, 5);
+    s_.contact_sync_active = false;
+  }
+
  private:
   // --- Frame helpers ------------------------------------------------------
   void ok(FrameWriter& out) { uint8_t f[1] = {RESP_CODE_OK}; out.writeFrame(f, 1); }
@@ -208,6 +239,7 @@ class CommandHandler {
   }
 
   void selfInfo(FrameWriter& out) {
+    s_.contact_sync_active = false;
     uint8_t f[128];
     size_t i = 0;
     f[i++] = RESP_CODE_SELF_INFO;
@@ -446,17 +478,16 @@ class CommandHandler {
 
   // --- Contacts -----------------------------------------------------------
   void getContacts(const uint8_t* cmd, size_t len, FrameWriter& out) {
+    if (s_.contact_sync_active) { err(ERR_BAD_STATE, out); return; }
     uint32_t since = len >= 5 ? proto::getU32LE(cmd, 1) : 0;
-    uint8_t start[5]; start[0] = RESP_CODE_CONTACTS_START;
+    uint8_t start[5];
+    start[0] = RESP_CODE_CONTACTS_START;
     proto::putU32LE(start, 1, uint32_t(s_.num_contacts));
     out.writeFrame(start, 5);
-    uint8_t f[160];  // a CONTACT frame is 148 bytes
-    for (int i = 0; i < s_.num_contacts; i++) {
-      if (s_.contacts[i].lastmod < since) continue;
-      size_t n = writeContactRespFrame(RESP_CODE_CONTACT, s_.contacts[i], f);
-      out.writeFrame(f, n);
-    }
-    uint8_t endf[1] = {RESP_CODE_END_OF_CONTACTS}; out.writeFrame(endf, 1);
+    s_.contact_sync_active = true;
+    s_.contact_sync_idx = 0;
+    s_.contact_sync_since = since;
+    s_.contact_sync_most_recent = 0;
   }
   void getContactByKey(const uint8_t* cmd, size_t len, FrameWriter& out) {
     if (len < 1 + proto::PUB_KEY_SIZE) { err(ERR_ILLEGAL_ARG, out); return; }
@@ -801,8 +832,9 @@ class CommandHandler {
     if (tx_.sendRawPacket(&cmd[2], len - 2, priority)) ok(out); else err(ERR_ILLEGAL_ARG, out);
   }
   void sendTracePath(const uint8_t* cmd, size_t len, FrameWriter& out) {
-    if (len <= 10 || len - 10 >= proto::MAX_PACKET_PAYLOAD - 5) { err(ERR_ILLEGAL_ARG, out); return; }
-    uint8_t path_len = uint8_t(len - 10);
+    // cmd: code, tag(4), auth(4), flags(1), routed hashes[...]
+    if (len <= 10 || len - 10 > proto::MAX_PACKET_PAYLOAD - 9) { err(ERR_ILLEGAL_ARG, out); return; }
+    uint8_t path_len = uint8_t(len - 10);  // bytes of routed node hashes
     uint8_t flags = cmd[9];
     uint8_t path_sz = flags & 0x03;
     if ((path_len >> path_sz) > proto::MAX_PATH_SIZE || (path_len % (1u << path_sz)) != 0) {
@@ -816,9 +848,21 @@ class CommandHandler {
     p = proto::putU32LE(pkt.payload, p, tag);
     p = proto::putU32LE(pkt.payload, p, auth);
     pkt.payload[p++] = flags;
+    // TRACE is special: the routed hashes travel in the PAYLOAD (the packet's
+    // path field is reserved for the per-hop SNRs each repeater appends), and the
+    // routing path starts empty. See Dispatcher::handleTrace.
+    std::memcpy(&pkt.payload[p], &cmd[10], path_len);
+    p += path_len;
     pkt.payload_len = uint16_t(p);
-    if (tx_.sendDirect(pkt, &cmd[10], path_len)) {
-      sent(SEND_DIRECT, tag, 0, out);  // est_timeout is board-computed
+    if (tx_.sendDirect(pkt, &cmd[10], 0)) {
+      // Tell the app how long to wait for the round-trip, or it times out
+      // instantly (est_timeout of 0). Mirrors MeshCore calcDirectTimeoutMillisFor:
+      // base + (airtime*factor + per-hop) * (hops + 1) for the return through each
+      // listed repeater. Airtime is the outbound frame (header+path_len byte+payload).
+      uint8_t hops = uint8_t(path_len >> path_sz);
+      uint32_t airtime = timeOnAirMs(pkt.payload_len + 2, float(s_.bw_hz) / 1000.0f, s_.sf, s_.cr);
+      uint32_t est = 500u + uint32_t(airtime * 6.0f + 250.0f) * (uint32_t(hops) + 1u);
+      sent(SEND_DIRECT, tag, est, out);
     } else err(ERR_TABLE_FULL, out);
   }
   void sendControlData(const uint8_t* cmd, size_t len, FrameWriter& out) {

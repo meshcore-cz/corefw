@@ -43,6 +43,7 @@ cpp-test: crypto-objs
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/storage_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_storetest && /tmp/corefw_storetest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I $(SHA256DIR) -I $(AESDIR) -I $(CRYPTODIR) $(TESTDIR)/receiver_test.cpp $(OBJDIR)/sha256.o $(OBJDIR)/aes128.o $(OBJDIR)/ed25519/*.o -o /tmp/corefw_rxtest && /tmp/corefw_rxtest
 	@$(CXX) $(CXXFLAGS) $(INCLUDE) $(TESTDIR)/ui_test.cpp -o /tmp/corefw_uitest && /tmp/corefw_uitest
+	@$(CXX) $(CXXFLAGS) $(INCLUDE) -I firmware $(TESTDIR)/gps_test.cpp -o /tmp/corefw_gpstest && /tmp/corefw_gpstest
 
 # Compile the vendored orlp/ed25519 and SHA-256 sources as C into build/obj.
 crypto-objs:

@@ -18,8 +18,17 @@ class CompanionTransport {
   // True while an app is connected.
   virtual bool connected() const = 0;
 
-  // Write raw bytes (a complete framed message) to the app.
-  virtual void write(const uint8_t* data, size_t len) = 0;
+  // Write raw bytes (a complete framed message) to the app. Returns false if the
+  // transport could not accept the full frame without blocking (USB CDC).
+  virtual bool write(const uint8_t* data, size_t len) = 0;
+
+  // Write as much as fits without blocking. Default: all-or-nothing via write().
+  virtual size_t writePartial(const uint8_t* data, size_t len) {
+    return write(data, len) ? len : 0;
+  }
+
+  // Drain any outbound queue (BLE). Called from the companion loop.
+  virtual void poll() {}
 
   // Read up to cap bytes that have arrived from the app; returns the count.
   virtual size_t read(uint8_t* buf, size_t cap) = 0;

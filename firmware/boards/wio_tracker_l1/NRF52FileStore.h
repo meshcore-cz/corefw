@@ -24,10 +24,23 @@ namespace corefw::board {
 
 class NRF52FileStore : public companion::FileStore {
  public:
-  void begin() {
+  // Mounts InternalFS (always) and, if enabled, the external QSPI volume.
+  //
+  // Mounting QSPI can hardfault or brown out the chip on some units. A marker
+  // file on InternalFS (which survives ANY reset, unlike RAM) latches the
+  // attempt: it is written before the mount and removed only once the mount
+  // returns without crashing. So if a mount ever crashes, the marker persists
+  // and QSPI is skipped on every later boot — the device can never boot-loop.
+  void begin(bool /*unused*/ = true) {
     InternalFS.begin();
 #if defined(QSPIFLASH) && defined(COREFW_ENABLE_QSPI_STORE)
-    qspi_mounted_ = qspi_.begin();
+    static const char* kQspiGuard = "/qspi_bad";
+    if (!InternalFS.exists(kQspiGuard)) {
+      uint8_t one = 1;
+      writeInternal(kQspiGuard, &one, 1);   // "attempting" — persists if we crash
+      qspi_mounted_ = qspi_.begin();
+      InternalFS.remove(kQspiGuard);         // reached here → mount didn't crash
+    }
 #endif
     migrateToMeshCoreLayout();
   }

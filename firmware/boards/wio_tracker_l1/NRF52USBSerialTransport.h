@@ -10,6 +10,7 @@
 #if defined(COREFW_TARGET) && defined(NRF52_PLATFORM)
 
 #include <Arduino.h>
+#include "NRF52UsbCdc.h"
 
 namespace corefw::board {
 
@@ -17,9 +18,15 @@ class NRF52USBSerialTransport : public companion::CompanionTransport {
  public:
   void begin(uint32_t baud = 115200) { Serial.begin(baud); }
 
-  bool connected() const override { return true; }
+  bool connected() const override { return usbCdcHostOpen(); }
 
-  void write(const uint8_t* data, size_t len) override { Serial.write(data, len); }
+  bool write(const uint8_t* data, size_t len) override {
+    return writePartial(data, len) == len;
+  }
+
+  size_t writePartial(const uint8_t* data, size_t len) override {
+    return board::usbCdcWritePartial(data, len);
+  }
 
   size_t read(uint8_t* buf, size_t cap) override {
     size_t n = 0;

@@ -25,11 +25,23 @@ namespace corefw {
 
 enum class CompanionTransportKind { BLE, USB, WiFi };
 
+inline constexpr int kAdvertPathTableSize = 16;
+
+struct AdvertPath {
+  uint8_t pubkey_prefix[7] = {};
+  uint8_t path_len = 0;
+  char name[32] = {};
+  uint32_t recv_timestamp = 0;
+  uint8_t path[proto::MAX_PATH_SIZE] = {};
+};
+
 // CompanionModule is also a PacketSink (subscribe it to the Dispatcher so mesh
 // packets addressed to this node are decrypted) and a MessageReceiver::Sink
 // (the decrypted results come back to onContactMessage/onChannelMessage).
 class CompanionModule : public Module,
                         public PacketSink,
+                        public RawRxObserver,
+                        public TraceObserver,
                         public companion::MessageReceiver::Sink {
  public:
   const char* name() const override { return "companion"; }
@@ -37,6 +49,51 @@ class CompanionModule : public Module,
   // PacketSink: hand each delivered packet to the receiver (which filters by
   // dest hash / channel and decrypts). Returns true if consumed.
   bool onPacket(const proto::Packet& pkt) override { return receiver_.handle(pkt); }
+
+  // RawRxObserver: stream every raw frame off the radio to the app as
+  // PUSH_CODE_LOG_RX_DATA (MeshCore MyMesh::logRxRaw). Uses the same
+  // non-blocking queue as every other push, so it works on BLE and USB alike.
+  void onRawRx(const uint8_t* raw, size_t len, int8_t snr_q4, int8_t rssi) override {
+    if (!shouldPushToApp()) return;
+    if (len == 0 || len + 3 > companion::MAX_FRAME_SIZE) return;
+    uint8_t payload[companion::MAX_FRAME_SIZE];
+    payload[0] = companion::PUSH_CODE_LOG_RX_DATA;
+    payload[1] = uint8_t(snr_q4);
+    payload[2] = uint8_t(rssi);
+    std::memcpy(&payload[3], raw, len);
+    uint8_t out[companion::MAX_FRAME_SIZE + 3];
+    size_t on = companion::encodeFrame(out, payload, len + 3);
+    if (on > 0) scheduleIo(out, on);
+  }
+
+  // TraceObserver: a TRACE we originated has returned. Emit PUSH_CODE_TRACE_DATA
+  // in MeshCore's MyMesh::onTraceRecv layout so the app's Trace Path view can
+  // render the per-hop SNRs.
+  void onTrace(uint32_t tag, uint32_t auth, uint8_t flags, const uint8_t* snrs,
+               uint8_t snr_count, const uint8_t* hashes, uint8_t hash_len,
+               int8_t final_snr_q4) override {
+    (void)snr_count;
+    if (!shouldPushToApp()) return;
+    const uint8_t path_sz = flags & 0x03;
+    const uint8_t nsnr = uint8_t(hash_len >> path_sz);
+    // frame: code, reserved, hash_len, flags, tag(4), auth(4), hashes, snrs, final
+    const size_t total = 4u + 4u + 4u + hash_len + nsnr + 1u;
+    if (total > companion::MAX_FRAME_SIZE) return;
+    uint8_t payload[companion::MAX_FRAME_SIZE];
+    size_t i = 0;
+    payload[i++] = companion::PUSH_CODE_TRACE_DATA;
+    payload[i++] = 0;          // reserved
+    payload[i++] = hash_len;   // MeshCore sends the hash-byte length here
+    payload[i++] = flags;
+    i = proto::putU32LE(payload, i, tag);
+    i = proto::putU32LE(payload, i, auth);
+    std::memcpy(&payload[i], hashes, hash_len); i += hash_len;
+    std::memcpy(&payload[i], snrs, nsnr); i += nsnr;
+    payload[i++] = uint8_t(final_snr_q4);
+    uint8_t out[companion::MAX_FRAME_SIZE + 3];
+    size_t on = companion::encodeFrame(out, payload, i);
+    if (on > 0) scheduleIo(out, on);
+  }
 
   // --- Configuration (from generated code) --------------------------------
   void setTransport(const char* t) {
@@ -72,7 +129,15 @@ class CompanionModule : public Module,
   // tick pumps the transport, command handling, melody and screen. The target
   // calls this from the main loop; `now_ms` is the monotonic clock.
   void tick(uint32_t now_ms) {
-    pumpTransport();
+    if (io_) io_->poll();
+    flushScheduledIo();
+    bool cmd = pumpTransport();
+    if (!cmd && state_.contact_sync_active && io_ && host_ && sender_ &&
+        io_count_ < kIoQueueDepth - 1) {
+      companion::CommandHandler handler(state_, *host_, *sender_);
+      TransportWriter writer(this);
+      handler.pumpContactSync(writer);
+    }
     if (melody_.playing()) melody_.loop(now_ms);
     refreshUI(now_ms);
   }
@@ -132,10 +197,12 @@ class CompanionModule : public Module,
 
   // A verified advert. Push NEW_ADVERT (full contact) for a freshly-added
   // contact, or ADVERT (pubkey only) for a refresh, matching the reference.
-  void onAdvert(const companion::ContactInfo& contact, bool is_new) override {
+  void onAdvert(const companion::ContactInfo& contact, bool is_new, uint8_t encoded_path_len,
+                const uint8_t* path_bytes, uint32_t recv_ts) override {
     if (is_new) dirty_ = true;
     ui_.addRecentAdvert(contact.name, host_ ? host_->rtcNow() : 0);
-    if (!connected_ || io_ == nullptr) return;
+    recordAdvertPath(contact, encoded_path_len, path_bytes, recv_ts);
+    if (!shouldPushToApp()) return;
     uint8_t f[companion::MAX_FRAME_SIZE];
     size_t n;
     if (is_new) {
@@ -147,7 +214,7 @@ class CompanionModule : public Module,
     }
     uint8_t out[companion::MAX_FRAME_SIZE + 3];
     size_t on = companion::encodeFrame(out, f, n);
-    if (on > 0) io_->write(out, on);
+    if (on > 0) scheduleIo(out, on);
   }
 
   void onEvent(const Event& e) override {
@@ -155,7 +222,6 @@ class CompanionModule : public Module,
       connected_ = true;
       ui_.setConnected(true);
       ui_.setSerialEnabled(true);
-      beep(ui::melodies::kStartup);
     } else if (e.type == EventType::CompanionDisconnected) {
       connected_ = false;
       ui_.setConnected(false);
@@ -164,32 +230,65 @@ class CompanionModule : public Module,
 
   bool connected() const { return connected_; }
 
+  // GET_ADVERT_PATH lookup (MeshCore advert_paths[] table).
+  int advertPath(const uint8_t* pub_key, uint32_t& recv_ts, uint8_t* path) const {
+    for (int i = 0; i < kAdvertPathTableSize; i++) {
+      if (std::memcmp(advert_paths_[i].pubkey_prefix, pub_key, sizeof(advert_paths_[i].pubkey_prefix)) == 0) {
+        recv_ts = advert_paths_[i].recv_timestamp;
+        uint8_t bl = uint8_t((advert_paths_[i].path_len & 63) * (((advert_paths_[i].path_len >> 6) + 1)));
+        std::memcpy(path, advert_paths_[i].path, bl);
+        return bl;
+      }
+    }
+    return -1;
+  }
+
+  // Play the boot chime once hardware is ready (MeshCore UITask::begin()).
+  void playStartupMelody() {
+    if (buzzer_ != nullptr && clock_ != nullptr) {
+      melody_.play(ui::melodies::kStartup, clock_->millis());
+    }
+  }
+
  private:
-  // TransportWriter frames each handler response and writes it to the transport.
+  static constexpr int kIoQueueDepth = 8;
+
+  // TransportWriter frames each handler response and queues it for the transport.
   class TransportWriter : public companion::FrameWriter {
    public:
-    explicit TransportWriter(companion::CompanionTransport* io) : io_(io) {}
+    explicit TransportWriter(CompanionModule* mod) : mod_(mod) {}
     void writeFrame(const uint8_t* data, size_t len) override {
-      if (!io_) return;
+      if (!mod_ || !mod_->io_) return;
       uint8_t out[companion::MAX_FRAME_SIZE + 3];
       size_t n = companion::encodeFrame(out, data, len);
-      if (n > 0) io_->write(out, n);
+      if (n > 0) mod_->scheduleIo(out, n);
     }
    private:
-    companion::CompanionTransport* io_;
+    CompanionModule* mod_;
   };
 
   // Read inbound bytes, decode frames, run the command handler and reply.
-  void pumpTransport() {
-    if (io_ == nullptr || host_ == nullptr || sender_ == nullptr) return;
+  // Processes at most one command per call (MeshCore checkSerialInterface).
+  bool pumpTransport() {
+    if (io_ == nullptr || host_ == nullptr || sender_ == nullptr) return false;
     uint8_t in[companion::MAX_FRAME_SIZE];
     size_t n = io_->read(in, sizeof(in));
-    if (n == 0) return;
+    if (n == 0) return false;
     companion::CommandHandler handler(state_, *host_, *sender_);
-    TransportWriter writer(io_);
+    TransportWriter writer(this);
+    bool handled = false;
     decoder_.feed(in, n, frame_, [&](const uint8_t* payload, size_t plen) {
+      if (handled) return;
+      handled = true;
       handler.handle(payload, plen, writer);
     });
+    return handled;
+  }
+
+  bool shouldPushToApp() const {
+    if (io_ == nullptr) return false;
+    if (transport_kind_ == CompanionTransportKind::USB) return true;
+    return connected_;
   }
 
   void enqueueAndNotify(const uint8_t* frame, int len, const char* who, const char* text,
@@ -202,11 +301,59 @@ class CompanionModule : public Module,
       beep(ui::melodies::kMessage);
     }
     (void)who; (void)path_len;
-    if (connected_ && io_) {
+    if (shouldPushToApp()) {
       uint8_t tickle[1] = {companion::PUSH_CODE_MSG_WAITING};
       uint8_t out[4];
       size_t nn = companion::encodeFrame(out, tickle, 1);
-      io_->write(out, nn);
+      if (nn > 0) scheduleIo(out, nn);
+    }
+  }
+
+  void recordAdvertPath(const companion::ContactInfo& contact, uint8_t encoded_path_len,
+                        const uint8_t* path_bytes, uint32_t recv_ts) {
+    if (path_bytes == nullptr || !proto::Packet::isValidPathLen(encoded_path_len)) return;
+    AdvertPath* slot = advert_paths_;
+    uint32_t oldest = 0xFFFFFFFF;
+    for (int i = 0; i < kAdvertPathTableSize; i++) {
+      if (std::memcmp(advert_paths_[i].pubkey_prefix, contact.id.pub_key,
+                      sizeof(advert_paths_[i].pubkey_prefix)) == 0) {
+        slot = &advert_paths_[i];
+        break;
+      }
+      if (advert_paths_[i].recv_timestamp < oldest) {
+        oldest = advert_paths_[i].recv_timestamp;
+        slot = &advert_paths_[i];
+      }
+    }
+    std::memcpy(slot->pubkey_prefix, contact.id.pub_key, sizeof(slot->pubkey_prefix));
+    std::strncpy(slot->name, contact.name, sizeof(slot->name) - 1);
+    slot->name[sizeof(slot->name) - 1] = 0;
+    slot->recv_timestamp = recv_ts;
+    slot->path_len = encoded_path_len;
+    uint8_t bl = uint8_t((encoded_path_len & 63) * (((encoded_path_len >> 6) + 1)));
+    std::memcpy(slot->path, path_bytes, bl);
+  }
+
+  void scheduleIo(const uint8_t* framed, size_t len) {
+    if (len > sizeof(io_queue_[0]) || io_count_ >= kIoQueueDepth) return;
+    std::memcpy(io_queue_[io_tail_], framed, len);
+    io_queue_len_[io_tail_] = len;
+    io_tail_ = (io_tail_ + 1) % kIoQueueDepth;
+    io_count_++;
+  }
+
+  void flushScheduledIo() {
+    if (io_ == nullptr || io_count_ == 0) return;
+    while (io_count_ > 0) {
+      size_t len = io_queue_len_[io_head_];
+      size_t sent = io_->writePartial(io_queue_[io_head_] + io_partial_off_,
+                                       len - io_partial_off_);
+      if (sent == 0) return;
+      io_partial_off_ += sent;
+      if (io_partial_off_ < len) return;
+      io_partial_off_ = 0;
+      io_head_ = (io_head_ + 1) % kIoQueueDepth;
+      io_count_--;
     }
   }
 
@@ -217,6 +364,11 @@ class CompanionModule : public Module,
     ui_.setNodeName(state_.node_name);
     ui_.setBlePin(state_.ble_pin);
     ui_.setRadio(state_.freq_khz, state_.bw_hz, state_.sf, state_.cr, state_.tx_power_dbm);
+    if (host_ != nullptr) {
+      ui_.setNoiseFloorDbm(host_->radioNoiseFloorDbm());
+      ui_.setGps(host_->gpsEnabled(), host_->gpsHasFix(), host_->gpsSatellites(),
+                 state_.lat_e6, state_.lon_e6);
+    }
     uint32_t delay = ui_.render(*display_, now_ms, host_ ? host_->rtcNow() : 0);
     next_render_ = now_ms + delay;
     dirty_ = false;
@@ -249,6 +401,13 @@ class CompanionModule : public Module,
   int unread_ = 0;
   bool dirty_ = true;
   uint32_t next_render_ = 0;
+  AdvertPath advert_paths_[kAdvertPathTableSize] = {};
+  uint8_t io_queue_[kIoQueueDepth][companion::MAX_FRAME_SIZE + 3] = {};
+  size_t io_queue_len_[kIoQueueDepth] = {};
+  int io_head_ = 0;
+  int io_tail_ = 0;
+  int io_count_ = 0;
+  size_t io_partial_off_ = 0;
 };
 
 }  // namespace corefw

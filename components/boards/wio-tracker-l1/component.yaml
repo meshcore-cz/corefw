@@ -5,7 +5,7 @@ status: official
 license: MIT
 description: Seeed Wio Tracker L1 (nRF52840 + SX1262, SH1106 OLED, GPS)
 maintainers:
-  - jan.stransky@arnal.cz
+  - tree@tree.fail
 
 compatibility:
   platform: ">=0.1 <0.2"
@@ -65,6 +65,13 @@ build:
     SX126X_RX_BOOSTED_GAIN: "1"
     DISPLAY_ADDRESS: "0x3D"
     QSPIFLASH: "1"
+    # COREFW_ENABLE_QSPI_STORE (contacts/channels on external QSPI, where stock
+    # MeshCore keeps them) is DISABLED: every mount attempt — via Adafruit_SPIFlash
+    # AND via raw nrfx_qspi with chip-wake — power-cycles the chip before any RAM
+    # or flash guard can commit (bootloader ends up in DFU/blinking). Needs SWD/
+    # hardware debugging to root-cause. Code is complete in NRF52QSPIFileSystem.h /
+    # NRF52FileStore.h; flip this back on once the brownout is understood.
+    # COREFW_ENABLE_QSPI_STORE: "1"
     PIN_OLED_RESET: "-1"
     GPS_BAUD_RATE: "9600"
     LORA_TX_POWER: "22"

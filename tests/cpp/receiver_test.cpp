@@ -34,7 +34,9 @@ struct RecordingSink : MessageReceiver::Sink {
                         const char* text) override {
     channel_msgs++; last_ts = ts; last_channel = name; last_text = text;
   }
-  void onAdvert(const ContactInfo&, bool is_new) override { adverts++; last_advert_new = is_new; }
+  void onAdvert(const ContactInfo&, bool is_new, uint8_t, const uint8_t*, uint32_t) override {
+    adverts++; last_advert_new = is_new;
+  }
 };
 
 static proto::LocalIdentity idOf(uint8_t b) {

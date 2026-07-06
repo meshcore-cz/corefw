@@ -5,7 +5,7 @@ status: official
 license: MIT
 description: Companion radio role — pairs with a phone/app over BLE, USB or Wi-Fi
 maintainers:
-  - jan.stransky@arnal.cz
+  - tree@tree.fail
 
 compatibility:
   platform: ">=0.1 <0.2"

@@ -192,12 +192,14 @@ static void testSelfAdvert() {
 static void testContacts() {
   Fixture f;
   Collector out; auto cmd = f.handler();
-  // GET_CONTACTS: START, one CONTACT, END.
+  // GET_CONTACTS: START, then one CONTACT per pump, then END.
   uint8_t gc[] = {CMD_GET_CONTACTS};
   cmd.handle(gc, 1, out);
-  check(out.frames.size() == 3, "contacts: start+1+end");
+  check(out.frames.size() == 1, "contacts: start only");
   check(out.frames[0][0] == RESP_CODE_CONTACTS_START, "contacts start");
   check(proto::getU32LE(out.frames[0].data(), 1) == 1, "contacts count 1");
+  while (cmd.contactSyncActive()) cmd.pumpContactSync(out);
+  check(out.frames.size() == 3, "contacts: start+1+end");
   check(out.frames[1][0] == RESP_CODE_CONTACT, "contact frame");
   check(std::memcmp(&out.frames[1][1], f.peer.pub_key, proto::PUB_KEY_SIZE) == 0, "contact pubkey");
   check(out.frames[2][0] == RESP_CODE_END_OF_CONTACTS, "contacts end");
